@@ -24,18 +24,63 @@ def robocopy(src, dest):
         sys.exit(1)
 
 
+def _get_drive_info(drive_letter):
+    """Return (drive_type, size_gb, current_label) via PowerShell, or None on failure."""
+    ps = (
+        f"$v = Get-Volume -DriveLetter {drive_letter} -ErrorAction SilentlyContinue;"
+        f"if ($v) {{ '{drive_letter},' + $v.DriveType + ',' + $v.Size + ',' + $v.FileSystemLabel }}"
+    )
+    result = subprocess.run(
+        ["powershell", "-Command", ps],
+        capture_output=True, text=True, check=False
+    )
+    line = result.stdout.strip()
+    if not line:
+        return None
+    parts = line.split(",", 3)
+    if len(parts) < 4:
+        return None
+    _, drive_type, size_str, current_label = parts
+    try:
+        size_gb = int(size_str) / (1024 ** 3)
+    except ValueError:
+        size_gb = 0
+    return drive_type.strip(), size_gb, current_label.strip()
+
+
 def format_usb(usb_root, usb_cfg):
     drive_letter = pathlib.Path(usb_root).drive.rstrip(":")
     if not drive_letter:
         print("Error: could not determine drive letter from path.", file=sys.stderr)
         sys.exit(1)
 
+    # Hard block: never format the system drive
+    if drive_letter.upper() == "C":
+        print("Error: refusing to format C: (system drive).", file=sys.stderr)
+        sys.exit(1)
+
+    # Verify drive type via PowerShell before doing anything destructive
+    info = _get_drive_info(drive_letter)
+    if info is None:
+        print(f"Error: could not read drive info for {drive_letter}: — is it mounted?",
+              file=sys.stderr)
+        sys.exit(1)
+
+    drive_type, size_gb, current_label = info
+    if drive_type != "Removable":
+        print(f"Error: {drive_letter}: is type '{drive_type}', not 'Removable'.", file=sys.stderr)
+        print("  Formatting non-removable drives is not allowed.", file=sys.stderr)
+        sys.exit(1)
+
     label = usb_cfg.get("label", "MYUSB")
     filesystem = usb_cfg.get("filesystem", "NTFS")
 
-    print(f"\n  WARNING: This will ERASE all data on drive {drive_letter}:")
-    print(f"  Filesystem: {filesystem}, Label: {label}")
-    confirm = input(f"\n  Type the drive letter '{drive_letter}' to confirm: ").strip().upper()
+    print(f"\n  Drive {drive_letter}:")
+    print(f"    Type    : {drive_type}")
+    print(f"    Size    : {size_gb:.1f} GB")
+    print(f"    Label   : {current_label or '(none)'}")
+    print(f"\n  WARNING: formatting as {filesystem}, new label '{label}'")
+    confirm = input(f"\n  Type the drive letter '{drive_letter}' to confirm ERASE: ").strip().upper()
     if confirm != drive_letter.upper():
         print("  Aborted.")
         sys.exit(0)
