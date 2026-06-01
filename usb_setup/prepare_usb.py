@@ -104,8 +104,22 @@ def fetch_program(name, prog_cfg, dest_dir, force):
         return
 
     if "smb_source" in prog_cfg:
-        print(f"  Copying '{name}' from SMB: {prog_cfg['smb_source']}")
-        robocopy(prog_cfg["smb_source"], dest_dir)
+        smb = pathlib.PureWindowsPath(prog_cfg["smb_source"])
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        if smb.suffix:
+            # Direct path to a file — copy just that file
+            print(f"  Copying '{name}' from SMB: {prog_cfg['smb_source']}")
+            result = subprocess.run(
+                ["robocopy", str(smb.parent), str(dest_dir), smb.name, "/NJH", "/NJS"],
+                check=False
+            )
+            if result.returncode > 7:
+                print(f"  [ERROR] robocopy failed (exit {result.returncode})", file=sys.stderr)
+                sys.exit(1)
+        else:
+            # Path to a directory — copy everything inside
+            print(f"  Copying '{name}' from SMB folder: {prog_cfg['smb_source']}")
+            robocopy(prog_cfg["smb_source"], dest_dir)
     else:
         dest_dir.mkdir(parents=True, exist_ok=True)
         print(f"  Downloading '{name}' via winget ({prog_cfg['winget_id']})...")
