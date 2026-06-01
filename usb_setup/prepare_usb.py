@@ -155,7 +155,7 @@ def download_wheels(repo_dir, python_version, force, req_path=None):
         return
 
     deps_dir = repo_dir / "deps"
-    if deps_dir.exists() and any(deps_dir.iterdir()) and not force:
+    if deps_dir.exists() and any(f for f in deps_dir.iterdir() if f.name != "install.bat") and not force:
         print(f"  [skip] deps already populated: {repo_dir.name}/deps")
         return
 
@@ -187,6 +187,68 @@ def download_wheels(repo_dir, python_version, force, req_path=None):
 
     count = sum(1 for f in deps_dir.iterdir() if f.suffix == ".whl")
     print(f"  {count} wheel(s) saved to {repo_dir.name}/deps/")
+    generate_deps_bat(deps_dir, repo_dir.name, req_path or "requirements.txt")
+
+
+def _write_bat(path, lines):
+    pathlib.Path(path).write_text("\r\n".join(lines) + "\r\n", encoding="cp1252")
+
+
+def _program_install_lines(folder_var, name):
+    """Return bat lines that install all .exe and .msi files from folder_var."""
+    lines = [
+        f'for %%F in ("{folder_var}*.exe") do (',
+        f'    echo   Running %%~nxF ...',
+        f'    "%%F" /S /quiet /norestart /VERYSILENT /NORESTART',
+        f')',
+        f'for %%F in ("{folder_var}*.msi") do (',
+        f'    echo   Running %%~nxF ...',
+        f'    msiexec /i "%%F" /quiet /norestart',
+        f')',
+    ]
+    if name.lower() == "python":
+        lines += [
+            ":: Refresh PATH so python/pip are visible in this session",
+            'for /f "tokens=2*" %%A in (\'reg query "HKLM\\SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment" /v Path 2^>nul\') do set "SYSPATH=%%B"',
+            'set "PATH=%SYSPATH%;%PATH%"',
+        ]
+    return lines
+
+
+def generate_program_bat(dest_dir, name):
+    """Generate a standalone install.bat inside a program's folder."""
+    lines = [
+        "@echo off",
+        'set "DIR=%~dp0"',
+        f"echo Installing {name}...",
+        "",
+    ] + _program_install_lines("%DIR%", name) + [
+        "",
+        "echo Done.",
+        "pause",
+    ]
+    _write_bat(pathlib.Path(dest_dir) / "install.bat", lines)
+    print(f"  Created: programs/{name}/install.bat")
+
+
+def generate_deps_bat(deps_dir, repo_name, req_rel):
+    """Generate a standalone install.bat inside a deps/ folder."""
+    req_from_deps = ("..\\" + req_rel.replace("/", "\\"))
+    lines = [
+        "@echo off",
+        'set "DEPS=%~dp0"',
+        f"echo Installing pip packages for {repo_name}...",
+        "",
+        f'pip install --no-index --find-links="%DEPS%" -r "%DEPS%{req_from_deps}"',
+        'if %errorlevel% neq 0 (',
+        '    echo [ERROR] pip install failed.',
+        ') else (',
+        '    echo Done.',
+        ')',
+        "pause",
+    ]
+    _write_bat(pathlib.Path(deps_dir) / "install.bat", lines)
+    print(f"  Created: {repo_name}/deps/install.bat")
 
 
 def generate_install_bat(usb_root, config):
@@ -207,33 +269,21 @@ def generate_install_bat(usb_root, config):
         name = prog["name"]
         lines += [
             "",
-            f"echo.",
+            "echo.",
             f"echo --- Installing {name} ---",
-            f'for %%F in ("%USB%programs\\{name}\\*.exe") do (',
-            f'    echo   Running %%~nxF ...',
-            # Pass all common silent-install flags; installers ignore unknown ones
-            f'    "%%F" /S /quiet /norestart /VERYSILENT /NORESTART',
-            ")",
-        ]
-        # After Python, refresh PATH from registry so pip is visible in this cmd session
-        if name.lower() == "python":
-            lines += [
-                ":: Refresh PATH so python/pip are visible in this session",
-                'for /f "tokens=2*" %%A in (\'reg query "HKLM\\SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment" /v Path 2^>nul\') do set "SYSPATH=%%B"',
-                'set "PATH=%SYSPATH%;%PATH%"',
-            ]
+        ] + _program_install_lines(f"%USB%programs\\{name}\\", name)
 
     for repo in repos:
         name = repo["name"]
         req_rel = (repo.get("requirements") or "requirements.txt").replace("/", "\\")
         lines += [
             "",
-            f"echo.",
+            "echo.",
             f"echo --- pip install: {name} ---",
             f'if exist "%USB%repos\\{name}\\deps\\" (',
             f'    pip install --no-index --find-links="%USB%repos\\{name}\\deps" -r "%USB%repos\\{name}\\{req_rel}"',
             f'    if %errorlevel% neq 0 echo [WARN] pip install failed for {name}',
-            f") else (",
+            ") else (",
             f"    echo   [skip] no deps folder for {name}",
             ")",
         ]
@@ -247,8 +297,7 @@ def generate_install_bat(usb_root, config):
         "pause",
     ]
 
-    bat_path = pathlib.Path(usb_root) / "install.bat"
-    bat_path.write_text("\r\n".join(lines) + "\r\n", encoding="cp1252")
+    _write_bat(pathlib.Path(usb_root) / "install.bat", lines)
     print(f"  Created: install.bat")
 
 
@@ -326,7 +375,9 @@ def main():
     if programs:
         section("Downloading Programs")
         for prog in programs:
-            fetch_program(prog["name"], prog, usb_root / "programs" / prog["name"], args.force)
+            dest = usb_root / "programs" / prog["name"]
+            fetch_program(prog["name"], prog, dest, args.force)
+            generate_program_bat(dest, prog["name"])
 
     # 3. OS images
     os_images = config.get("os_images", [])
