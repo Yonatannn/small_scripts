@@ -338,8 +338,19 @@ def main():
             if dest.exists() and any(dest.iterdir()) and not args.force:
                 print(f"  [skip] already exists: OS/{name}")
                 continue
+            smb = pathlib.PureWindowsPath(img["smb_source"])
+            dest.mkdir(parents=True, exist_ok=True)
             print(f"  Copying '{name}' from: {img['smb_source']}")
-            robocopy(img["smb_source"], dest)
+            if smb.suffix:
+                result = subprocess.run(
+                    ["robocopy", str(smb.parent), str(dest), smb.name, "/NJH", "/NJS"],
+                    check=False
+                )
+                if result.returncode > 7:
+                    print(f"  [ERROR] robocopy failed (exit {result.returncode})", file=sys.stderr)
+                    sys.exit(1)
+            else:
+                robocopy(img["smb_source"], dest)
 
     # 4. Repos + wheels
     repos = config.get("repos", [])
