@@ -1,0 +1,33 @@
+{
+  "usb": {
+    "label": "MYUSB",
+    "format": false,
+    "filesystem": "NTFS"
+  },
+  "python_version": "3.12",
+  "programs": [
+    {
+      "name": "python",
+      "winget_id": "Python.Python.3.12",
+      "smb_source": ""
+    },
+    {
+      "name": "git",
+      "winget_id": "Git.Git",
+      "smb_source": ""
+    }
+  ],
+  "os_images": [
+    {
+      "name": "pixhawk",
+      "smb_source": "\\\\server\\share\\pixhawk_versions"
+    }
+  ],
+  "repos": [
+    {
+      "name": "my-project",
+      "url": "https://github.com/user/my-project.git",
+      "branch": "main"
+    }
+  ]
+}
