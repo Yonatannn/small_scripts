@@ -2,7 +2,6 @@
 import argparse
 import json
 import pathlib
-import shutil
 import subprocess
 import sys
 
@@ -186,8 +185,6 @@ def download_wheels(repo_dir, python_version, force, req_path=None):
               file=sys.stderr)
         sys.exit(1)
 
-    shutil.copy2(req_file, deps_dir / "requirements.txt")
-
     count = sum(1 for f in deps_dir.iterdir() if f.suffix == ".whl")
     print(f"  {count} wheel(s) saved to {repo_dir.name}/deps/")
     generate_deps_bat(deps_dir, repo_dir.name)
@@ -238,10 +235,9 @@ def generate_deps_bat(deps_dir, repo_name):
     """Generate a standalone install.bat inside a deps/ folder."""
     lines = [
         "@echo off",
-        'cd /d "%~dp0"',
         f"echo Installing pip packages for {repo_name}...",
         "",
-        'pip install --no-index --find-links="." -r "requirements.txt"',
+        'for %%W in ("%~dp0*.whl") do pip install --no-index "%%W"',
         'if %errorlevel% neq 0 (',
         '    echo [ERROR] pip install failed.',
         ') else (',
@@ -277,13 +273,12 @@ def generate_install_bat(usb_root, config):
 
     for repo in repos:
         name = repo["name"]
-        req_rel = (repo.get("requirements") or "requirements.txt").replace("/", "\\")
         lines += [
             "",
             "echo.",
             f"echo --- pip install: {name} ---",
             f'if exist "%USB%repos\\{name}\\deps\\" (',
-            f'    pip install --no-index --find-links="%USB%repos\\{name}\\deps" -r "%USB%repos\\{name}\\{req_rel}"',
+            f'    for %%W in ("%USB%repos\\{name}\\deps\\*.whl") do pip install --no-index "%%W"',
             f'    if %errorlevel% neq 0 echo [WARN] pip install failed for {name}',
             ") else (",
             f"    echo   [skip] no deps folder for {name}",
