@@ -2,6 +2,7 @@
 import argparse
 import json
 import pathlib
+import shutil
 import subprocess
 import sys
 
@@ -185,9 +186,11 @@ def download_wheels(repo_dir, python_version, force, req_path=None):
               file=sys.stderr)
         sys.exit(1)
 
+    shutil.copy2(req_file, deps_dir / "requirements.txt")
+
     count = sum(1 for f in deps_dir.iterdir() if f.suffix == ".whl")
     print(f"  {count} wheel(s) saved to {repo_dir.name}/deps/")
-    generate_deps_bat(deps_dir, repo_dir.name, req_path or "requirements.txt")
+    generate_deps_bat(deps_dir, repo_dir.name)
 
 
 def _write_bat(path, lines):
@@ -231,15 +234,14 @@ def generate_program_bat(dest_dir, name):
     print(f"  Created: programs/{name}/install.bat")
 
 
-def generate_deps_bat(deps_dir, repo_name, req_rel):
+def generate_deps_bat(deps_dir, repo_name):
     """Generate a standalone install.bat inside a deps/ folder."""
-    req_from_deps = ("..\\" + req_rel.replace("/", "\\"))
     lines = [
         "@echo off",
-        'set "DEPS=%~dp0"',
+        'cd /d "%~dp0"',
         f"echo Installing pip packages for {repo_name}...",
         "",
-        f'pip install --no-index --find-links="%DEPS%" -r "%DEPS%{req_from_deps}"',
+        'pip install --no-index --find-links="." -r "requirements.txt"',
         'if %errorlevel% neq 0 (',
         '    echo [ERROR] pip install failed.',
         ') else (',
