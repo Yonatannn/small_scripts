@@ -95,12 +95,12 @@ def clone_repo(repo_cfg, dest_dir, force):
         sys.exit(1)
 
 
-def download_wheels(repo_dir, python_version, force):
+def download_wheels(repo_dir, python_version, force, req_path=None):
     repo_dir = pathlib.Path(repo_dir)
-    req_file = repo_dir / "requirements.txt"
+    req_file = repo_dir / (req_path or "requirements.txt")
 
     if not req_file.exists():
-        print(f"  [skip] no requirements.txt in '{repo_dir.name}'")
+        print(f"  [skip] requirements not found: {req_file.relative_to(repo_dir.parent)}")
         return
 
     deps_dir = repo_dir / "deps"
@@ -174,12 +174,13 @@ def generate_install_bat(usb_root, config):
 
     for repo in repos:
         name = repo["name"]
+        req_rel = (repo.get("requirements") or "requirements.txt").replace("/", "\\")
         lines += [
             "",
             f"echo.",
             f"echo --- pip install: {name} ---",
             f'if exist "%USB%repos\\{name}\\deps\\" (',
-            f'    pip install --no-index --find-links="%USB%repos\\{name}\\deps" -r "%USB%repos\\{name}\\requirements.txt"',
+            f'    pip install --no-index --find-links="%USB%repos\\{name}\\deps" -r "%USB%repos\\{name}\\{req_rel}"',
             f'    if %errorlevel% neq 0 echo [WARN] pip install failed for {name}',
             f") else (",
             f"    echo   [skip] no deps folder for {name}",
@@ -286,7 +287,7 @@ def main():
             print(f"\n  [{repo['name']}]")
             repo_dir = usb_root / "repos" / repo["name"]
             clone_repo(repo, repo_dir, args.force)
-            download_wheels(repo_dir, python_version, args.force)
+            download_wheels(repo_dir, python_version, args.force, repo.get("requirements"))
 
     # 5. install.bat
     section("Generating install.bat")

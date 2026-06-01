@@ -28,6 +28,12 @@
       "name": "my-project",
       "url": "https://github.com/user/my-project.git",
       "branch": "main"
+    },
+    {
+      "name": "nested-reqs-example",
+      "url": "https://github.com/user/nested-reqs-example.git",
+      "branch": "main",
+      "requirements": "config/requirements.txt"
     }
   ]
 }
