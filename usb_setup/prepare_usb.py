@@ -103,24 +103,19 @@ def fetch_program(name, prog_cfg, dest_dir, force):
         print(f"  [skip] already exists: programs/{name}")
         return
 
-    smb = prog_cfg.get("smb_source", "").strip()
-    winget_id = prog_cfg.get("winget_id", "").strip()
-
-    if smb:
-        print(f"  Copying '{name}' from SMB: {smb}")
-        robocopy(smb, dest_dir)
-    elif winget_id:
+    if "smb_source" in prog_cfg:
+        print(f"  Copying '{name}' from SMB: {prog_cfg['smb_source']}")
+        robocopy(prog_cfg["smb_source"], dest_dir)
+    else:
         dest_dir.mkdir(parents=True, exist_ok=True)
-        print(f"  Downloading '{name}' via winget ({winget_id})...")
+        print(f"  Downloading '{name}' via winget ({prog_cfg['winget_id']})...")
         result = subprocess.run([
-            "winget", "download", "--id", winget_id,
+            "winget", "download", "--id", prog_cfg["winget_id"],
             "--download-directory", str(dest_dir),
             "--accept-source-agreements", "--accept-package-agreements"
         ], check=False)
         if result.returncode != 0:
             print(f"  [WARN] winget download may have failed for '{name}' (exit {result.returncode})")
-    else:
-        print(f"  [WARN] No smb_source or winget_id for '{name}', skipping.")
 
 
 def clone_repo(repo_cfg, dest_dir, force):
@@ -129,10 +124,7 @@ def clone_repo(repo_cfg, dest_dir, force):
         print(f"  [skip] already cloned: repos/{repo_cfg['name']}")
         return
 
-    cmd = ["git", "clone", "--depth", "1"]
-    if repo_cfg.get("branch"):
-        cmd += ["--branch", repo_cfg["branch"]]
-    cmd += [repo_cfg["url"], str(dest_dir)]
+    cmd = ["git", "clone", "--recurse-submodules", repo_cfg["url"], str(dest_dir)]
 
     result = subprocess.run(cmd, check=False)
     if result.returncode != 0:
@@ -258,6 +250,17 @@ def load_config(config_path):
 
 
 def validate_config(config):
+    for prog in config.get("programs", []):
+        has_smb = "smb_source" in prog
+        has_winget = "winget_id" in prog
+        if has_smb and has_winget:
+            print(f"Error: program '{prog.get('name', '?')}' has both smb_source and winget_id — use one only.",
+                  file=sys.stderr)
+            sys.exit(1)
+        if not has_smb and not has_winget:
+            print(f"Error: program '{prog.get('name', '?')}' needs either smb_source or winget_id.",
+                  file=sys.stderr)
+            sys.exit(1)
     for repo in config.get("repos", []):
         if not repo.get("name"):
             print("Error: repo entry missing 'name'", file=sys.stderr)

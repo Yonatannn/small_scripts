@@ -8,13 +8,11 @@
   "programs": [
     {
       "name": "python",
-      "winget_id": "Python.Python.3.12",
-      "smb_source": ""
+      "winget_id": "Python.Python.3.12"
     },
     {
       "name": "git",
-      "winget_id": "Git.Git",
-      "smb_source": ""
+      "smb_source": "\\\\server\\share\\programs\\git"
     }
   ],
   "os_images": [
@@ -26,13 +24,11 @@
   "repos": [
     {
       "name": "my-project",
-      "url": "https://github.com/user/my-project.git",
-      "branch": "main"
+      "url": "https://github.com/user/my-project.git"
     },
     {
       "name": "nested-reqs-example",
       "url": "https://github.com/user/nested-reqs-example.git",
-      "branch": "main",
       "requirements": "config/requirements.txt"
     }
   ]
