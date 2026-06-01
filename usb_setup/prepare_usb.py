@@ -146,17 +146,17 @@ def clone_repo(repo_cfg, dest_dir, force):
         sys.exit(1)
 
 
-def download_wheels(repo_dir, python_version, force, req_path=None):
+def download_wheels(repo_dir, python_version, force, requirements=None):
     repo_dir = pathlib.Path(repo_dir)
-    req_file = repo_dir / (req_path or "requirements.txt")
+    req_file = repo_dir / (requirements or "requirements.txt")
 
     if not req_file.exists():
-        print(f"  [skip] requirements not found: {req_file.relative_to(repo_dir.parent)}")
+        print(f"  [skip] requirements not found: {req_file.relative_to(repo_dir)}")
         return
 
     deps_dir = repo_dir / "deps"
-    if deps_dir.exists() and any(f for f in deps_dir.iterdir() if f.name != "install.bat") and not force:
-        print(f"  [skip] deps already populated: {repo_dir.name}/deps")
+    if deps_dir.exists() and not force:
+        print(f"  [skip] deps already exists: {repo_dir.name}/deps")
         return
 
     deps_dir.mkdir(parents=True, exist_ok=True)
@@ -194,17 +194,19 @@ def _write_bat(path, lines):
     pathlib.Path(path).write_text("\r\n".join(lines) + "\r\n", encoding="cp1252")
 
 
-def _program_install_lines(folder_var, name):
-    """Return bat lines that install all .exe and .msi files from folder_var."""
+def _program_install_lines(folder_expr, name):
+    """Return bat lines that pushd into folder_expr and install all .exe/.msi files."""
     lines = [
-        f'for %%F in ("{folder_var}*.exe") do (',
-        f'    echo   Running %%~nxF ...',
-        f'    "%%F" /S /quiet /norestart /VERYSILENT /NORESTART',
-        f')',
-        f'for %%F in ("{folder_var}*.msi") do (',
-        f'    echo   Running %%~nxF ...',
-        f'    msiexec /i "%%F" /quiet /norestart',
-        f')',
+        f'pushd "{folder_expr}"',
+        'for %%F in (*.exe) do (',
+        '    echo   Running %%F ...',
+        '    "%%F" /S /quiet /norestart /VERYSILENT /NORESTART',
+        ')',
+        'for %%F in (*.msi) do (',
+        '    echo   Running %%F ...',
+        '    msiexec /i "%%F" /quiet /norestart',
+        ')',
+        'popd',
     ]
     if name.lower() == "python":
         lines += [
@@ -216,13 +218,11 @@ def _program_install_lines(folder_var, name):
 
 
 def generate_program_bat(dest_dir, name):
-    """Generate a standalone install.bat inside a program's folder."""
     lines = [
         "@echo off",
-        'set "DIR=%~dp0"',
         f"echo Installing {name}...",
         "",
-    ] + _program_install_lines("%DIR%", name) + [
+    ] + _program_install_lines("%~dp0", name) + [
         "",
         "echo Done.",
         "pause",
@@ -232,17 +232,15 @@ def generate_program_bat(dest_dir, name):
 
 
 def generate_deps_bat(deps_dir, repo_name):
-    """Generate a standalone install.bat inside a deps/ folder."""
     lines = [
         "@echo off",
         f"echo Installing pip packages for {repo_name}...",
         "",
-        'for %%W in ("%~dp0*.whl") do pip install --no-index "%%W"',
-        'if %errorlevel% neq 0 (',
-        '    echo [ERROR] pip install failed.',
-        ') else (',
-        '    echo Done.',
-        ')',
+        'pushd "%~dp0"',
+        'for %%W in (*.whl) do pip install --no-index "%%W"',
+        'popd',
+        "",
+        "echo Done.",
         "pause",
     ]
     _write_bat(pathlib.Path(deps_dir) / "install.bat", lines)
@@ -255,7 +253,6 @@ def generate_install_bat(usb_root, config):
 
     lines = [
         "@echo off",
-        "setlocal enabledelayedexpansion",
         'set "USB=%~dp0"',
         "",
         "echo ============================================================",
@@ -269,7 +266,7 @@ def generate_install_bat(usb_root, config):
             "",
             "echo.",
             f"echo --- Installing {name} ---",
-        ] + _program_install_lines(f"%USB%programs\\{name}\\", name)
+        ] + _program_install_lines(f"%USB%programs\\{name}", name)
 
     for repo in repos:
         name = repo["name"]
@@ -278,8 +275,9 @@ def generate_install_bat(usb_root, config):
             "echo.",
             f"echo --- pip install: {name} ---",
             f'if exist "%USB%repos\\{name}\\deps\\" (',
-            f'    for %%W in ("%USB%repos\\{name}\\deps\\*.whl") do pip install --no-index "%%W"',
-            f'    if %errorlevel% neq 0 echo [WARN] pip install failed for {name}',
+            f'    pushd "%USB%repos\\{name}\\deps"',
+            f'    for %%W in (*.whl) do pip install --no-index "%%W"',
+            f'    popd',
             ") else (",
             f"    echo   [skip] no deps folder for {name}",
             ")",
@@ -408,7 +406,7 @@ def main():
             print(f"\n  [{repo['name']}]")
             repo_dir = usb_root / "repos" / repo["name"]
             clone_repo(repo, repo_dir, args.force)
-            download_wheels(repo_dir, python_version, args.force, repo.get("requirements"))
+            download_wheels(repo_dir, python_version, args.force, requirements=repo.get("requirements"))
 
     # 5. install.bat
     section("Generating install.bat")
