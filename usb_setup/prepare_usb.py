@@ -2,6 +2,7 @@
 import argparse
 import json
 import pathlib
+import shutil
 import subprocess
 import sys
 
@@ -10,6 +11,14 @@ def section(title):
     print(f"\n{'=' * 60}")
     print(f"  {title}")
     print('=' * 60)
+
+
+def confirm_overwrite(label):
+    while True:
+        ans = input(f"\n  '{label}' already exists. Overwrite? [y/n]: ").strip().lower()
+        if ans in ("y", "n"):
+            return ans == "y"
+        print("  Please enter y or n.")
 
 
 def robocopy(src, dest):
@@ -24,85 +33,9 @@ def robocopy(src, dest):
         sys.exit(1)
 
 
-def _get_drive_info(drive_letter):
-    """Return (drive_type, size_gb, current_label) via PowerShell, or None on failure."""
-    ps = (
-        f"$v = Get-Volume -DriveLetter {drive_letter} -ErrorAction SilentlyContinue;"
-        f"if ($v) {{ '{drive_letter},' + $v.DriveType + ',' + $v.Size + ',' + $v.FileSystemLabel }}"
-    )
-    result = subprocess.run(
-        ["powershell", "-Command", ps],
-        capture_output=True, text=True, check=False
-    )
-    line = result.stdout.strip()
-    if not line:
-        return None
-    parts = line.split(",", 3)
-    if len(parts) < 4:
-        return None
-    _, drive_type, size_str, current_label = parts
-    try:
-        size_gb = int(size_str) / (1024 ** 3)
-    except ValueError:
-        size_gb = 0
-    return drive_type.strip(), size_gb, current_label.strip()
 
-
-def format_usb(usb_root, usb_cfg):
-    drive_letter = pathlib.Path(usb_root).drive.rstrip(":")
-    if not drive_letter:
-        print("Error: could not determine drive letter from path.", file=sys.stderr)
-        sys.exit(1)
-
-    # Hard block: never format the system drive
-    if drive_letter.upper() == "C":
-        print("Error: refusing to format C: (system drive).", file=sys.stderr)
-        sys.exit(1)
-
-    # Verify drive type via PowerShell before doing anything destructive
-    info = _get_drive_info(drive_letter)
-    if info is None:
-        print(f"Error: could not read drive info for {drive_letter}: — is it mounted?",
-              file=sys.stderr)
-        sys.exit(1)
-
-    drive_type, size_gb, current_label = info
-    if drive_type != "Removable":
-        print(f"Error: {drive_letter}: is type '{drive_type}', not 'Removable'.", file=sys.stderr)
-        print("  Formatting non-removable drives is not allowed.", file=sys.stderr)
-        sys.exit(1)
-
-    label = usb_cfg.get("label", "MYUSB")
-    filesystem = usb_cfg.get("filesystem", "NTFS")
-
-    print(f"\n  Drive {drive_letter}:")
-    print(f"    Type    : {drive_type}")
-    print(f"    Size    : {size_gb:.1f} GB")
-    print(f"    Label   : {current_label or '(none)'}")
-    print(f"\n  WARNING: formatting as {filesystem}, new label '{label}'")
-    confirm = input(f"\n  Type the drive letter '{drive_letter}' to confirm ERASE: ").strip().upper()
-    if confirm != drive_letter.upper():
-        print("  Aborted.")
-        sys.exit(0)
-
-    result = subprocess.run([
-        "powershell", "-Command",
-        f"Format-Volume -DriveLetter {drive_letter} -FileSystem {filesystem} "
-        f"-NewFileSystemLabel '{label}' -Confirm:$false -Force"
-    ], check=False)
-
-    if result.returncode != 0:
-        print("  [ERROR] Format failed.", file=sys.stderr)
-        sys.exit(1)
-    print(f"  [OK] {drive_letter}: formatted ({filesystem}, '{label}')")
-
-
-def fetch_program(name, prog_cfg, dest_dir, force):
+def fetch_program(name, prog_cfg, dest_dir):
     dest_dir = pathlib.Path(dest_dir)
-    if dest_dir.exists() and any(dest_dir.iterdir()) and not force:
-        print(f"  [skip] already exists: programs/{name}")
-        return
-
     if "smb_source" in prog_cfg:
         smb = pathlib.PureWindowsPath(prog_cfg["smb_source"])
         dest_dir.mkdir(parents=True, exist_ok=True)
@@ -132,12 +65,8 @@ def fetch_program(name, prog_cfg, dest_dir, force):
             print(f"  [WARN] winget download may have failed for '{name}' (exit {result.returncode})")
 
 
-def clone_repo(repo_cfg, dest_dir, force):
+def clone_repo(repo_cfg, dest_dir):
     dest_dir = pathlib.Path(dest_dir)
-    if dest_dir.exists() and not force:
-        print(f"  [skip] already cloned: repos/{repo_cfg['name']}")
-        return
-
     cmd = ["git", "clone", "--recurse-submodules", repo_cfg["url"], str(dest_dir)]
 
     result = subprocess.run(cmd, check=False)
@@ -146,7 +75,7 @@ def clone_repo(repo_cfg, dest_dir, force):
         sys.exit(1)
 
 
-def download_wheels(repo_dir, python_version, force, requirements=None):
+def download_wheels(repo_dir, python_version, requirements=None):
     repo_dir = pathlib.Path(repo_dir)
     req_file = repo_dir / (requirements or "requirements.txt")
 
@@ -155,10 +84,6 @@ def download_wheels(repo_dir, python_version, force, requirements=None):
         return
 
     deps_dir = repo_dir / "deps"
-    if deps_dir.exists() and not force:
-        print(f"  [skip] deps already exists: {repo_dir.name}/deps")
-        return
-
     deps_dir.mkdir(parents=True, exist_ok=True)
 
     # e.g. "3.12" or "3.12.10" -> "312"
@@ -336,8 +261,6 @@ def main():
     parser.add_argument("usb_drive", help="USB root path (e.g. E:\\\\)")
     parser.add_argument("-c", "--config", default="config.json", metavar="FILE",
                         help="Path to config JSON (default: config.json)")
-    parser.add_argument("--force", action="store_true",
-                        help="Re-download / re-clone even if already present")
     args = parser.parse_args()
 
     usb_root = pathlib.Path(args.usb_drive)
@@ -359,31 +282,33 @@ def main():
 
     python_version = config.get("python_version", "3.12")
 
-    # 1. Format
-    usb_cfg = config.get("usb", {})
-    if usb_cfg.get("format"):
-        section("Formatting USB")
-        format_usb(usb_root, usb_cfg)
-
-    # 2. Programs
+    # 1. Programs
     programs = config.get("programs", [])
     if programs:
         section("Downloading Programs")
         for prog in programs:
             dest = usb_root / "programs" / prog["name"]
-            fetch_program(prog["name"], prog, dest, args.force)
+            if dest.exists():
+                if not confirm_overwrite(f"programs/{prog['name']}"):
+                    print(f"  [skip] programs/{prog['name']}")
+                    generate_program_bat(dest, prog["name"])
+                    continue
+                shutil.rmtree(dest)
+            fetch_program(prog["name"], prog, dest)
             generate_program_bat(dest, prog["name"])
 
-    # 3. OS images
+    # 2. OS images
     os_images = config.get("os_images", [])
     if os_images:
         section("Copying OS Images")
         for img in os_images:
             name = img["name"]
             dest = usb_root / "OS" / name
-            if dest.exists() and any(dest.iterdir()) and not args.force:
-                print(f"  [skip] already exists: OS/{name}")
-                continue
+            if dest.exists():
+                if not confirm_overwrite(f"OS/{name}"):
+                    print(f"  [skip] OS/{name}")
+                    continue
+                shutil.rmtree(dest)
             smb = pathlib.PureWindowsPath(img["smb_source"])
             dest.mkdir(parents=True, exist_ok=True)
             print(f"  Copying '{name}' from: {img['smb_source']}")
@@ -398,17 +323,22 @@ def main():
             else:
                 robocopy(img["smb_source"], dest)
 
-    # 4. Repos + wheels
+    # 3. Repos + wheels
     repos = config.get("repos", [])
     if repos:
         section("Cloning Repos & Downloading Wheels")
         for repo in repos:
             print(f"\n  [{repo['name']}]")
             repo_dir = usb_root / "repos" / repo["name"]
-            clone_repo(repo, repo_dir, args.force)
-            download_wheels(repo_dir, python_version, args.force, requirements=repo.get("requirements"))
+            if repo_dir.exists():
+                if not confirm_overwrite(f"repos/{repo['name']}"):
+                    print(f"  [skip] repos/{repo['name']}")
+                    continue
+                shutil.rmtree(repo_dir)
+            clone_repo(repo, repo_dir)
+            download_wheels(repo_dir, python_version, requirements=repo.get("requirements"))
 
-    # 5. install.bat
+    # 4. install.bat
     section("Generating install.bat")
     generate_install_bat(usb_root, config)
 

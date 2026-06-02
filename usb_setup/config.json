@@ -1,9 +1,4 @@
 {
-  "usb": {
-    "label": "MYUSB",
-    "format": false,
-    "filesystem": "NTFS"
-  },
   "python_version": "3.12",
   "programs": [
     {
