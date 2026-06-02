@@ -1,0 +1,30 @@
+{
+  "python_version": "3.12",
+  "programs": [
+    {
+      "name": "python",
+      "winget_id": "Python.Python.3.12"
+    },
+    {
+      "name": "git",
+      "smb_source": "\\\\server\\share\\programs\\git"
+    }
+  ],
+  "os_images": [
+    {
+      "name": "pixhawk",
+      "smb_source": "\\\\server\\share\\pixhawk_versions"
+    }
+  ],
+  "repos": [
+    {
+      "name": "my-project",
+      "url": "https://github.com/user/my-project.git"
+    },
+    {
+      "name": "nested-reqs-example",
+      "url": "https://github.com/user/nested-reqs-example.git",
+      "requirements": "config/requirements.txt"
+    }
+  ]
+}
