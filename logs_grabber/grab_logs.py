@@ -69,8 +69,18 @@ def _remove_empty_dirs(root):
             pass
 
 
-def move_tree(src, dst, log=print, on_bytes=None):
-    moved = skipped = 0
+def _transfer_file(s, d, move, on_bytes):
+    size = os.path.getsize(s)
+    if move:
+        shutil.move(s, d)
+    else:
+        shutil.copy2(s, d)
+    if on_bytes:
+        on_bytes(size)
+
+
+def transfer_tree(src, dst, move=False, log=print, on_bytes=None):
+    done = skipped = 0
     for root, _dirs, files in os.walk(src):
         rel = os.path.relpath(root, src)
         target_root = dst if rel == "." else os.path.join(dst, rel)
@@ -79,48 +89,31 @@ def move_tree(src, dst, log=print, on_bytes=None):
             s = os.path.join(root, f)
             d = os.path.join(target_root, f)
             try:
-                size = os.path.getsize(s)
-                shutil.move(s, d)
-                moved += 1
-                if on_bytes:
-                    on_bytes(size)
+                _transfer_file(s, d, move, on_bytes)
+                done += 1
             except OSError as e:
                 log(f"  [skip] {s}: {e}")
                 skipped += 1
-    _remove_empty_dirs(src)
-    return moved, skipped
+    if move:
+        _remove_empty_dirs(src)
+    return done, skipped
 
 
-def collect_source(path, dest_dir, log=print, on_bytes=None):
+def transfer_source(path, dest_dir, move=False, log=print, on_bytes=None):
     p = pathlib.Path(path)
     if not p.exists():
         log(f"  [WARN] source not found, skipping: {path}")
         return 0, 0
     if p.is_dir():
         os.makedirs(dest_dir, exist_ok=True)
-        return move_tree(str(p), str(dest_dir), log=log, on_bytes=on_bytes)
+        return transfer_tree(str(p), str(dest_dir), move=move, log=log, on_bytes=on_bytes)
     os.makedirs(dest_dir, exist_ok=True)
     try:
-        size = p.stat().st_size
-        dest = pathlib.Path(dest_dir) / p.name
-        shutil.move(str(p), str(dest))
-        if on_bytes:
-            on_bytes(size)
+        _transfer_file(str(p), str(pathlib.Path(dest_dir) / p.name), move, on_bytes)
         return 1, 0
     except OSError as e:
         log(f"  [skip] {p}: {e}")
         return 0, 1
-
-
-def _counting_copy2(on_bytes):
-    def _cp(src, dst, *, follow_symlinks=True):
-        shutil.copy2(src, dst, follow_symlinks=follow_symlinks)
-        if on_bytes:
-            try:
-                on_bytes(os.path.getsize(dst))
-            except OSError:
-                pass
-    return _cp
 
 
 def mirror_relpath(abs_path):
@@ -257,46 +250,61 @@ def run_grab(config, selected_names=None, description="", log=print,
 
     report(0.0, "Scanning...")
     scanned = sum(path_size(os.path.expandvars(s["path"])) for s in selected)
-    total_units = max(1, 2 * scanned)
-    COPY_FRAC = 0.85
-    copied_units = 0
+    total = max(1, scanned)
+    BACKUP_FRAC = 0.45  # phase A: copy to %TEMP%
+    MOVE_FRAC = 0.35    # phase B: move to output (0.50 .. 0.85)
+    current_stage = ""
 
-    def on_bytes(n):
-        nonlocal copied_units
-        copied_units += n
-        report(COPY_FRAC * copied_units / total_units, current_stage)
+    # --- Phase A: copy everything to the %TEMP% backup and zip it FIRST ----
+    copied_bytes = 0
 
-    log("Collecting logs...")
+    def on_copy(n):
+        nonlocal copied_bytes
+        copied_bytes += n
+        report(BACKUP_FRAC * copied_bytes / total, current_stage)
+
+    log("Backing up to %TEMP%...")
     if excluded:
         log(f"  Excluded: {', '.join(excluded)}")
-    total_copied = total_skipped = 0
     for src in selected:
         name = src["name"]
         path = os.path.expandvars(src["path"])
-        current_stage = f"Copying: {name}"
+        current_stage = f"Backing up: {name}"
         log(f"  [{name}] {path}")
-        report(COPY_FRAC * copied_units / total_units, current_stage)
+        rel = mirror_relpath(path)
+        dest_dir = temp_date_dir / (rel if pathlib.Path(path).is_dir() else rel.parent)
+        transfer_source(path, dest_dir, move=False, log=log, on_bytes=on_copy)
 
-        organized_target = organized_dir / name
-        copied, skipped = collect_source(path, organized_target, log=log, on_bytes=on_bytes)
-        total_copied += copied
-        total_skipped += skipped
-
-        if copied:
-            mirror_target = temp_date_dir / mirror_relpath(path)
-            if pathlib.Path(path).is_dir():
-                shutil.copytree(organized_target, mirror_target, dirs_exist_ok=True,
-                                copy_function=_counting_copy2(on_bytes))
-            else:
-                mirror_target.parent.mkdir(parents=True, exist_ok=True)
-                shutil.copy2(organized_target / pathlib.Path(path).name, mirror_target)
-                on_bytes(path_size(path))
-
-    log(f"  Total: {total_copied} moved, {total_skipped} skipped.")
-    report(COPY_FRAC, "Writing details...")
-
-    _write_info_file(bundle_dir, description, included, excluded, now)
     _write_info_file(temp_date_dir, description, included, excluded, now)
+    report(0.50, "Saving backup zip...")
+    temp_zip = temp_root / f"{temp_date_dir.name}.zip"
+    make_zip(temp_root, temp_zip, base_dir=temp_date_dir.name)
+    shutil.rmtree(temp_date_dir, ignore_errors=True)
+    log(f"  Backup saved: {temp_zip}")
+
+    # --- Phase B: now that the backup is safe, MOVE originals to output ----
+    moved_bytes = 0
+
+    def on_move(n):
+        nonlocal moved_bytes
+        moved_bytes += n
+        report(0.50 + MOVE_FRAC * moved_bytes / total, current_stage)
+
+    log("Moving logs to output...")
+    total_moved = total_skipped = 0
+    for src in selected:
+        name = src["name"]
+        path = os.path.expandvars(src["path"])
+        current_stage = f"Moving: {name}"
+        log(f"  [{name}] {path}")
+        moved, skipped = transfer_source(path, organized_dir / name, move=True,
+                                         log=log, on_bytes=on_move)
+        total_moved += moved
+        total_skipped += skipped
+    log(f"  Total: {total_moved} moved, {total_skipped} skipped.")
+
+    report(0.86, "Writing details...")
+    _write_info_file(bundle_dir, description, included, excluded, now)
 
     report(0.88, "Creating ZIP...")
     zip_path = bundle_dir / f"{bundle_dir.name}.zip"
@@ -305,11 +313,6 @@ def run_grab(config, selected_names=None, description="", log=print,
     report(0.93, "Creating .bin...")
     bin_path = bundle_dir / f"{bundle_dir.name}.zip.bin"
     run_add_data(add_data_script, zip_path, bin_path, kb, log=log)
-
-    report(0.97, "Backing up...")
-    temp_zip = temp_root / f"{temp_date_dir.name}.zip"
-    make_zip(temp_root, temp_zip, base_dir=temp_date_dir.name)
-    shutil.rmtree(temp_date_dir, ignore_errors=True)
 
     log(f"Done. Output: {bundle_dir}")
     log(f"Backup: {temp_zip}")
@@ -323,7 +326,7 @@ def run_grab(config, selected_names=None, description="", log=print,
         "zip": zip_path,
         "bin": bin_path,
         "temp_zip": temp_zip,
-        "copied": total_copied,
+        "copied": total_moved,
         "skipped": total_skipped,
     }
 

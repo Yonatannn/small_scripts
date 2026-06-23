@@ -12,20 +12,21 @@ Target platform: **Windows 11, Python 3.10**.
 ## What it does
 
 1. Reads `config.json` for the source locations and the output folder.
-2. **Moves** everything from each selected source (files or whole folders)
-   into a freshly organized package, grouped by source name. The files are
+2. **Backup first:** copies everything from each selected source to `%TEMP%`,
+   mirroring the original folder layout under a top-level `Logs - <date>`
+   folder, and saves it **as a single zip** -- before touching the originals.
+3. **Then moves** everything from each source into a freshly organized
+   package (grouped by source name) in the output folder. The files are
    **removed from their original location** (the top source folder itself is
    kept, just emptied).
-3. Zips that package.
-4. Runs the bundled `add_data.py` on the zip to produce a padded `.bin`.
+4. Zips that package and runs the bundled `add_data.py` to produce a padded
+   `.bin`.
 5. Keeps all **three** artifacts -- plus an `info.txt` description -- in a
    folder named **`Logs - <date>`**, and opens it in Explorer.
-6. Writes a backup of everything to `%TEMP%`, mirroring the original folder
-   layout under a top-level `Logs - <date>` folder, kept finally **only as a
-   single zip**. This backup is the safety copy of the moved files.
 
-Files that are locked / in use can't be moved; they are left in place and
-skipped with a warning.
+The `%TEMP%` zip is the safety copy: it is written and verified before any
+file is moved out of its original location. Files that are locked / in use
+can't be moved; they are left in place and skipped with a warning.
 
 ## Run it
 
