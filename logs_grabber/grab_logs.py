@@ -5,8 +5,7 @@ Collect log files from predefined locations, package them into a folder
 named "Logs - <date>", zip the package, run transfer/add_data.py on the
 zip, and keep all three artifacts. A mirrored backup of everything (by
 original folder layout) is also written to %TEMP% and kept there only as a
-zip. An optional Hebrew description is saved as info.txt inside the main
-folder.
+zip. An optional description is saved as info.txt inside the main folder.
 
 The collection logic lives in run_grab() so it can be driven from both
 this CLI and the GUI (gui.py).
@@ -223,22 +222,22 @@ def _unique_dir(parent, base, stamp):
 
 
 def _write_info_file(folder, description, included, excluded, now):
-    """Save the Hebrew description + collection summary as info.txt.
-    UTF-8 with BOM so Windows Notepad renders Hebrew correctly."""
+    """Save the description + collection summary as info.txt.
+    UTF-8 with BOM so Windows Notepad renders any non-ASCII text correctly."""
     lines = []
     if description and description.strip():
         lines.append(description.strip())
         lines.append("")
         lines.append("-" * 40)
         lines.append("")
-    lines.append(f"תאריך גיבוי: {now.strftime('%Y-%m-%d %H:%M:%S')}")
+    lines.append(f"Backup date: {now.strftime('%Y-%m-%d %H:%M:%S')}")
     lines.append("")
-    lines.append("סוגי לוגים שנאספו:")
+    lines.append("Log types collected:")
     for n in included:
         lines.append(f"  + {n}")
     if excluded:
         lines.append("")
-        lines.append("סוגי לוגים שהוחרגו (לא נאספו):")
+        lines.append("Log types excluded (not collected):")
         for n in excluded:
             lines.append(f"  - {n}")
     (pathlib.Path(folder) / "info.txt").write_text(
@@ -250,7 +249,7 @@ def run_grab(config, selected_names=None, description="", output_dir=None,
     """Run the full grab. Returns a dict of result paths. Raises GrabError.
 
     progress(fraction, stage) is called with fraction in 0..1 and a short
-    Hebrew stage label, so a GUI can drive a progress bar / ETA.
+    stage label, so a GUI can drive a progress bar / ETA.
     """
     def report(frac, stage):
         if progress:
@@ -293,7 +292,7 @@ def run_grab(config, selected_names=None, description="", output_dir=None,
 
     # Pre-scan total bytes so we can show real progress + an ETA. Each byte is
     # copied twice (organized package + temp mirror), hence the factor of 2.
-    report(0.0, "מחשב גודל...")
+    report(0.0, "Scanning...")
     scanned = sum(path_size(os.path.expandvars(s["path"])) for s in selected)
     total_units = max(1, 2 * scanned)
     COPY_FRAC = 0.85  # collection occupies 0..85% of the bar
@@ -311,7 +310,7 @@ def run_grab(config, selected_names=None, description="", output_dir=None,
     for src in selected:
         name = src["name"]
         path = os.path.expandvars(src["path"])
-        current_stage = f"מעתיק: {name}"
+        current_stage = f"Copying: {name}"
         log(f"\n  [{name}] {path}")
         report(COPY_FRAC * copied_units / total_units, current_stage)
 
@@ -335,7 +334,7 @@ def run_grab(config, selected_names=None, description="", output_dir=None,
                 on_bytes(path_size(path))
 
     log(f"\n  Total: {total_copied} file(s) copied, {total_skipped} skipped.")
-    report(COPY_FRAC, "כותב פרטים...")
+    report(COPY_FRAC, "Writing details...")
 
     # info.txt in both the main folder and the temp backup folder
     _write_info_file(bundle_dir, description, included, excluded, now)
@@ -343,12 +342,12 @@ def run_grab(config, selected_names=None, description="", output_dir=None,
 
     # --- Main bundle: zip + add_data --------------------------------------
     section("Packaging main bundle")
-    report(0.88, "דוחס לקובץ ZIP...")
+    report(0.88, "Creating ZIP...")
     zip_path = bundle_dir / f"{bundle_dir.name}.zip"
     log(f"  Zipping organized folder -> {zip_path.name}")
     make_zip(organized_dir, zip_path)
 
-    report(0.93, "יוצר קובץ מאובטח...")
+    report(0.93, "Creating .bin...")
     bin_path = bundle_dir / f"{bundle_dir.name}.zip.bin"
     run_add_data(add_data_script, zip_path, bin_path, kb, log=log)
 
@@ -360,7 +359,7 @@ def run_grab(config, selected_names=None, description="", output_dir=None,
 
     # --- Temp backup: zip (keep the named top folder) and keep only the zip --
     section("Backing up to %TEMP%")
-    report(0.97, "מגבה...")
+    report(0.97, "Backing up...")
     temp_zip = temp_root / f"{temp_date_dir.name}.zip"
     log(f"  Zipping backup -> {temp_zip}")
     make_zip(temp_root, temp_zip, base_dir=temp_date_dir.name)
@@ -370,7 +369,7 @@ def run_grab(config, selected_names=None, description="", output_dir=None,
     section("Done")
     log(f"\n  Output folder: {bundle_dir}")
     log(f"  Temp backup  : {temp_zip}\n")
-    report(1.0, "הסתיים")
+    report(1.0, "Done")
 
     if open_when_done:
         open_folder(bundle_dir, log=log)
@@ -403,7 +402,7 @@ def main():
     parser.add_argument("-o", "--output", metavar="DIR",
                         help="Override output directory from config")
     parser.add_argument("-d", "--description", default="", metavar="TEXT",
-                        help="Free-text (Hebrew) description saved to info.txt")
+                        help="Free-text description saved to info.txt")
     parser.add_argument("--only", metavar="NAMES",
                         help="Comma-separated source names to include (default: all)")
     parser.add_argument("--no-open", action="store_true",

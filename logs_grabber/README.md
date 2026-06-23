@@ -15,7 +15,7 @@ GUI uses `tkinter`, which ships with the standard Python.org installer).
    folders) into a freshly organized package, grouped by source name.
 3. Zips that package.
 4. Runs `../transfer/add_data.py` on the zip to produce a padded `.bin`.
-5. Keeps all **three** artifacts — plus an `info.txt` description — together
+5. Keeps all **three** artifacts -- plus an `info.txt` description -- together
    in a folder named **`Logs - <date>`**, and opens it in Explorer.
 6. In parallel, writes a **backup of everything to `%TEMP%`**, mirroring
    the *original* folder layout, under a top-level `Logs - <date>` folder.
@@ -29,11 +29,11 @@ python gui.py
 
 - Lists every log source with a checkbox. **All are checked by default**
   (everything is collected); uncheck anything you don't want this run.
-- A free-text box for a **Hebrew description** of the logs. It is saved to
+- A free-text box for a **description** of the logs. It is saved to
   `info.txt` (UTF-8, opens correctly in Notepad) inside the `Logs - <date>`
   folder and inside the temp backup, together with the list of which
   sources were included/excluded.
-- One big "התחל איסוף לוגים" button, a **progress bar with a live
+- One big "Start collecting logs" button, a **progress bar with a live
   time-remaining estimate** while it copies, and an output-directory
   picker. The result folder **opens automatically** when finished.
 
@@ -50,7 +50,7 @@ Logs - <YYYY-MM-DD>/
 │   └── myapp_local/...
 ├── Logs - <YYYY-MM-DD>.zip        <- zip of logs/
 ├── Logs - <YYYY-MM-DD>.zip.bin    <- add_data.py output
-└── info.txt                       <- Hebrew description + what was collected
+└── info.txt                       <- description + what was collected
 ```
 
 (If a folder for today already exists, a `(HH-MM-SS)` suffix is added.)
@@ -79,7 +79,7 @@ are expanded.
 ```bat
 python grab_logs.py                          :: collect everything
 python grab_logs.py --only windows_logs,cbs  :: only specific sources
-python grab_logs.py -d "תיאור בעברית"        :: description -> info.txt
+python grab_logs.py -d "my description"       :: description -> info.txt
 python grab_logs.py -o D:\exports            :: override output dir
 python grab_logs.py --no-open                :: don't open Explorer
 python grab_logs.py --gui                    :: launch the GUI
