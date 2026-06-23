@@ -33,8 +33,9 @@ python gui.py
   `info.txt` (UTF-8, opens correctly in Notepad) inside the `Logs - <date>`
   folder and inside the temp backup, together with the list of which
   sources were included/excluded.
-- Lets you override the output directory, shows live progress, and opens
-  the result folder when finished.
+- One big "התחל איסוף לוגים" button, a **progress bar with a live
+  time-remaining estimate** while it copies, and an output-directory
+  picker. The result folder **opens automatically** when finished.
 
 `python grab_logs.py --gui` launches the same GUI.
 
