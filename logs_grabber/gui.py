@@ -2,8 +2,8 @@
 import sys
 import time
 
-from PyQt6.QtCore import QThread, pyqtSignal
-from PyQt6.QtWidgets import (
+from PyQt5.QtCore import QThread, pyqtSignal
+from PyQt5.QtWidgets import (
     QApplication, QCheckBox, QFrame, QGroupBox, QHBoxLayout, QLabel,
     QMessageBox, QProgressBar, QPlainTextEdit, QPushButton, QScrollArea,
     QSizePolicy, QVBoxLayout, QWidget,
@@ -128,13 +128,13 @@ class MainWindow(QWidget):
 
         # Details
         line = QFrame()
-        line.setFrameShape(QFrame.Shape.HLine)
+        line.setFrameShape(QFrame.HLine)
         layout.addWidget(line)
         layout.addWidget(QLabel("Details"))
         self.log_view = QPlainTextEdit()
         self.log_view.setReadOnly(True)
         self.log_view.setStyleSheet("background: #1e1e1e; color: #dcdcdc;")
-        self.log_view.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        self.log_view.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         layout.addWidget(self.log_view)
 
     def _set_all(self, value):
@@ -205,7 +205,7 @@ def main():
         return
     window = MainWindow(config)
     window.show()
-    sys.exit(app.exec())
+    sys.exit(app.exec_())
 
 
 if __name__ == "__main__":

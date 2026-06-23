@@ -6,7 +6,7 @@ and produces three artifacts plus a separate dated backup in `%TEMP%`.
 Target platform: **Windows 11, Python 3.10**.
 
 - `grab_logs.py` — the collection logic (standard library only).
-- `gui.py` — a PyQt6 interface. Requires `pip install PyQt6`.
+- `gui.py` — a PyQt5 interface. Requires `pip install PyQt5`.
 
 ## What it does
 
@@ -26,7 +26,7 @@ Target platform: **Windows 11, Python 3.10**.
 GUI (recommended):
 
 ```bat
-pip install PyQt6
+pip install PyQt5
 python gui.py
 ```
 
