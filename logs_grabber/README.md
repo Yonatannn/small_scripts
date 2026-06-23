@@ -6,20 +6,26 @@ and produces three artifacts plus a separate dated backup in `%TEMP%`.
 Target platform: **Windows 11, Python 3.10**.
 
 - `grab_logs.py` — the collection logic (standard library only).
+- `add_data.py` — bundled padding tool used to produce the `.bin`.
 - `gui.py` — a PyQt5 interface. Requires `pip install PyQt5`.
 
 ## What it does
 
 1. Reads `config.json` for the source locations and the output folder.
-2. Copies **everything** from each selected source (files or whole folders)
-   into a freshly organized package, grouped by source name.
+2. **Moves** everything from each selected source (files or whole folders)
+   into a freshly organized package, grouped by source name. The files are
+   **removed from their original location** (the top source folder itself is
+   kept, just emptied).
 3. Zips that package.
-4. Runs `../transfer/add_data.py` on the zip to produce a padded `.bin`.
+4. Runs the bundled `add_data.py` on the zip to produce a padded `.bin`.
 5. Keeps all **three** artifacts -- plus an `info.txt` description -- in a
    folder named **`Logs - <date>`**, and opens it in Explorer.
-6. In parallel, writes a backup of everything to `%TEMP%`, mirroring the
-   original folder layout under a top-level `Logs - <date>` folder, kept
-   finally **only as a single zip**.
+6. Writes a backup of everything to `%TEMP%`, mirroring the original folder
+   layout under a top-level `Logs - <date>` folder, kept finally **only as a
+   single zip**. This backup is the safety copy of the moved files.
+
+Files that are locked / in use can't be moved; they are left in place and
+skipped with a warning.
 
 ## Run it
 
@@ -69,8 +75,8 @@ Temp backup (mirrors the original paths, kept only as a zip):
 | `sources`         | List of `{ "name", "path" }`. `path` may be a file or a folder.   |
 | `output_dir`      | Where the main folder is created (env vars expanded). Optional.   |
 | `add_data_kb`     | KB of random padding for `add_data.py` (default 4).               |
-| `add_data_script` | Override path to `add_data.py` (default: `../transfer/add_data.py`). |
+| `add_data_script` | Override path to `add_data.py` (default: the bundled `add_data.py`). |
 
-Environment variables in paths (e.g. `%LOCALAPPDATA%`, `%USERPROFILE%`)
-are expanded. Log files that are locked / in use are skipped with a warning
-rather than aborting the run.
+Subfolders inside a source folder are collected too, preserving their
+structure. Environment variables in paths (e.g. `%LOCALAPPDATA%`,
+`%USERPROFILE%`) are expanded.

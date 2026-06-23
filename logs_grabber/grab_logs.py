@@ -57,8 +57,20 @@ def path_size(path):
     return total
 
 
-def copy_tree_safe(src, dst, log=print, on_bytes=None):
-    copied = skipped = 0
+def _remove_empty_dirs(root):
+    root = os.path.abspath(root)
+    for dirpath, _dirs, _files in os.walk(root, topdown=False):
+        if os.path.abspath(dirpath) == root:
+            continue  # keep the original top-level source folder itself
+        try:
+            if not os.listdir(dirpath):
+                os.rmdir(dirpath)
+        except OSError:
+            pass
+
+
+def move_tree(src, dst, log=print, on_bytes=None):
+    moved = skipped = 0
     for root, _dirs, files in os.walk(src):
         rel = os.path.relpath(root, src)
         target_root = dst if rel == "." else os.path.join(dst, rel)
@@ -67,36 +79,33 @@ def copy_tree_safe(src, dst, log=print, on_bytes=None):
             s = os.path.join(root, f)
             d = os.path.join(target_root, f)
             try:
-                shutil.copy2(s, d)
-                copied += 1
+                size = os.path.getsize(s)
+                shutil.move(s, d)
+                moved += 1
                 if on_bytes:
-                    try:
-                        on_bytes(os.path.getsize(d))
-                    except OSError:
-                        pass
+                    on_bytes(size)
             except OSError as e:
                 log(f"  [skip] {s}: {e}")
                 skipped += 1
-    return copied, skipped
+    _remove_empty_dirs(src)
+    return moved, skipped
 
 
-def copy_source(path, dest_dir, log=print, on_bytes=None):
+def collect_source(path, dest_dir, log=print, on_bytes=None):
     p = pathlib.Path(path)
     if not p.exists():
         log(f"  [WARN] source not found, skipping: {path}")
         return 0, 0
     if p.is_dir():
         os.makedirs(dest_dir, exist_ok=True)
-        return copy_tree_safe(str(p), str(dest_dir), log=log, on_bytes=on_bytes)
+        return move_tree(str(p), str(dest_dir), log=log, on_bytes=on_bytes)
     os.makedirs(dest_dir, exist_ok=True)
     try:
+        size = p.stat().st_size
         dest = pathlib.Path(dest_dir) / p.name
-        shutil.copy2(str(p), str(dest))
+        shutil.move(str(p), str(dest))
         if on_bytes:
-            try:
-                on_bytes(os.path.getsize(dest))
-            except OSError:
-                pass
+            on_bytes(size)
         return 1, 0
     except OSError as e:
         log(f"  [skip] {p}: {e}")
@@ -163,7 +172,7 @@ def resolve_add_data_script(config):
         if not add_data_script.is_absolute():
             add_data_script = script_dir / add_data_script
     else:
-        add_data_script = script_dir.parent / "transfer" / "add_data.py"
+        add_data_script = script_dir / "add_data.py"
     if not add_data_script.is_file():
         raise GrabError(f"add_data.py not found at {add_data_script}")
     return add_data_script
@@ -269,7 +278,7 @@ def run_grab(config, selected_names=None, description="", log=print,
         report(COPY_FRAC * copied_units / total_units, current_stage)
 
         organized_target = organized_dir / name
-        copied, skipped = copy_source(path, organized_target, log=log, on_bytes=on_bytes)
+        copied, skipped = collect_source(path, organized_target, log=log, on_bytes=on_bytes)
         total_copied += copied
         total_skipped += skipped
 
@@ -283,7 +292,7 @@ def run_grab(config, selected_names=None, description="", log=print,
                 shutil.copy2(organized_target / pathlib.Path(path).name, mirror_target)
                 on_bytes(path_size(path))
 
-    log(f"  Total: {total_copied} copied, {total_skipped} skipped.")
+    log(f"  Total: {total_copied} moved, {total_skipped} skipped.")
     report(COPY_FRAC, "Writing details...")
 
     _write_info_file(bundle_dir, description, included, excluded, now)
