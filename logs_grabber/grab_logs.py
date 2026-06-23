@@ -238,8 +238,8 @@ def run_grab(config, selected_names=None, description="", log=print,
     out_root.mkdir(parents=True, exist_ok=True)
 
     now = datetime.datetime.now()
-    stamp = now.strftime("%H-%M-%S")
-    folder_name = f"Logs - {now.strftime('%Y-%m-%d')}"
+    stamp = str(now.microsecond)
+    folder_name = f"Logs_{now.strftime('%Y-%m-%d_%H-%M-%S')}"
 
     bundle_dir = _unique_dir(out_root, folder_name, stamp)
     organized_dir = bundle_dir / "logs"
