@@ -1,20 +1,13 @@
 #!/usr/bin/env python3
-"""Tkinter GUI for the logs grabber, aimed at non-technical users.
-
-- One checkbox per log source; everything is checked by default, so the
-  default behaviour is "collect everything". Uncheck whatever you don't want.
-- A box for a description, saved to info.txt inside "Logs - <date>".
-- A big progress bar with a live "time remaining" estimate while it copies.
-- The result folder opens automatically when it's done.
-
-Target platform: Windows 11, Python 3.10 (tkinter ships with Python).
-"""
-import os
-import queue
-import threading
+import sys
 import time
-import tkinter as tk
-from tkinter import filedialog, messagebox, ttk
+
+from PyQt6.QtCore import QThread, pyqtSignal
+from PyQt6.QtWidgets import (
+    QApplication, QCheckBox, QFrame, QGroupBox, QHBoxLayout, QLabel,
+    QMessageBox, QProgressBar, QPlainTextEdit, QPushButton, QScrollArea,
+    QSizePolicy, QVBoxLayout, QWidget,
+)
 
 import grab_logs
 
@@ -28,229 +21,191 @@ def _fmt_eta(seconds):
     return f"{seconds // 60}:{seconds % 60:02d} min"
 
 
-class LogsGrabberGUI:
-    def __init__(self, root, config):
-        self.root = root
+class Worker(QThread):
+    progress = pyqtSignal(float, str)
+    log = pyqtSignal(str)
+    done = pyqtSignal(dict)
+    failed = pyqtSignal(str)
+
+    def __init__(self, config, selected, description):
+        super().__init__()
         self.config = config
-        self.sources = config.get("sources", [])
-        self.queue = queue.Queue()
-        self.worker = None
-        self.start_time = None
-        self.source_vars = {}
+        self.selected = selected
+        self.description = description
 
-        root.title("Logs Grabber")
-        root.geometry("780x680")
-        root.minsize(660, 560)
-
-        main = ttk.Frame(root, padding=14)
-        main.pack(fill="both", expand=True)
-
-        ttk.Label(main, text="Logs Grabber", font=("Segoe UI", 16, "bold")).pack(
-            anchor="w")
-        ttk.Label(
-            main,
-            text="Choose which log types to collect (everything is checked by "
-                 "default), add a description, and click the big button. "
-                 "The folder opens automatically when finished.",
-            foreground="#555", wraplength=720, justify="left",
-        ).pack(anchor="w", pady=(0, 10))
-
-        # --- Sources checklist ------------------------------------------
-        box = ttk.LabelFrame(main, text="  Log types to collect  ", padding=8)
-        box.pack(fill="x", pady=4)
-
-        btns = ttk.Frame(box)
-        btns.pack(fill="x", pady=(0, 6))
-        ttk.Button(btns, text="Select all", command=lambda: self._set_all(True)).pack(
-            side="left", padx=2)
-        ttk.Button(btns, text="Clear all", command=lambda: self._set_all(False)).pack(
-            side="left", padx=2)
-
-        canvas = tk.Canvas(box, height=150, highlightthickness=0)
-        scroll = ttk.Scrollbar(box, orient="vertical", command=canvas.yview)
-        inner = ttk.Frame(canvas)
-        inner.bind("<Configure>",
-                   lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
-        canvas.create_window((0, 0), window=inner, anchor="nw")
-        canvas.configure(yscrollcommand=scroll.set)
-        canvas.pack(side="left", fill="both", expand=True)
-        scroll.pack(side="right", fill="y")
-
-        if not self.sources:
-            ttk.Label(inner, text="(no sources defined in config.json)").pack(anchor="w")
-        for src in self.sources:
-            name = src["name"]
-            var = tk.BooleanVar(value=True)
-            self.source_vars[name] = var
-            row = ttk.Frame(inner)
-            row.pack(fill="x", anchor="w")
-            ttk.Checkbutton(
-                row, variable=var,
-                text=f"{name}   —   {src.get('path', '')}",
-            ).pack(anchor="w")
-
-        # --- Description -------------------------------------------------
-        desc_box = ttk.LabelFrame(main, text="  Description (saved to info.txt)  ",
-                                  padding=8)
-        desc_box.pack(fill="x", pady=6)
-        self.desc_text = tk.Text(desc_box, height=3, wrap="word")
-        self.desc_text.pack(fill="x")
-
-        # --- Output dir --------------------------------------------------
-        out_box = ttk.Frame(main)
-        out_box.pack(fill="x", pady=6)
-        ttk.Label(out_box, text="Output folder:").pack(side="left")
-        default_out = str(grab_logs.resolve_output_dir(config))
-        self.out_var = tk.StringVar(value=default_out)
-        ttk.Entry(out_box, textvariable=self.out_var).pack(
-            side="left", fill="x", expand=True, padx=6)
-        ttk.Button(out_box, text="Browse...", command=self._browse_out).pack(side="left")
-
-        # --- Run button (big and obvious) -------------------------------
-        style = ttk.Style()
-        try:
-            style.configure("Run.TButton", font=("Segoe UI", 13, "bold"), padding=10)
-        except tk.TclError:
-            pass
-        self.run_btn = ttk.Button(main, text="▶  Start collecting logs",
-                                  style="Run.TButton", command=self._on_run)
-        self.run_btn.pack(fill="x", pady=10)
-
-        # --- Progress ----------------------------------------------------
-        prog_box = ttk.Frame(main)
-        prog_box.pack(fill="x", pady=(0, 6))
-        self.progress = ttk.Progressbar(prog_box, maximum=100, mode="determinate")
-        self.progress.pack(fill="x")
-        self.status_var = tk.StringVar(value="Ready.")
-        ttk.Label(prog_box, textvariable=self.status_var, font=("Segoe UI", 10),
-                  anchor="w", justify="left").pack(fill="x", pady=(4, 0))
-
-        # --- Log output (details) ---------------------------------------
-        log_box = ttk.LabelFrame(main, text="  Details  ", padding=4)
-        log_box.pack(fill="both", expand=True)
-        self.log_text = tk.Text(log_box, height=8, wrap="word", state="disabled",
-                                background="#1e1e1e", foreground="#dcdcdc")
-        log_scroll = ttk.Scrollbar(log_box, command=self.log_text.yview)
-        self.log_text.configure(yscrollcommand=log_scroll.set)
-        log_scroll.pack(side="right", fill="y")
-        self.log_text.pack(side="left", fill="both", expand=True)
-
-    # --- helpers --------------------------------------------------------
-    def _set_all(self, value):
-        for var in self.source_vars.values():
-            var.set(value)
-
-    def _browse_out(self):
-        chosen = filedialog.askdirectory(initialdir=self.out_var.get() or os.getcwd())
-        if chosen:
-            self.out_var.set(chosen)
-
-    def _append_log(self, msg):
-        self.log_text.configure(state="normal")
-        self.log_text.insert("end", msg + "\n")
-        self.log_text.see("end")
-        self.log_text.configure(state="disabled")
-
-    def _on_progress(self, frac, stage):
-        self.queue.put(("progress", frac, stage))
-
-    def _on_log(self, msg):
-        self.queue.put(("log", str(msg)))
-
-    def _flush_queue(self):
-        try:
-            while True:
-                item = self.queue.get_nowait()
-                if item[0] == "log":
-                    self._append_log(item[1])
-                elif item[0] == "progress":
-                    self._update_progress(item[1], item[2])
-        except queue.Empty:
-            pass
-
-    def _drain_queue(self):
-        self._flush_queue()
-        if self.worker and self.worker.is_alive():
-            self.root.after(100, self._drain_queue)
-        else:
-            self._flush_queue()  # final flush
-            self.run_btn.configure(state="normal", text="▶  Start collecting logs")
-
-    def _update_progress(self, frac, stage):
-        pct = int(frac * 100)
-        self.progress["value"] = pct
-        eta = ""
-        if self.start_time and 0.02 < frac < 1.0:
-            elapsed = time.time() - self.start_time
-            remaining = elapsed * (1 - frac) / frac
-            eta = f"  —  about {_fmt_eta(remaining)} left"
-        if frac >= 1.0:
-            self.status_var.set("Done! ✓  Opening folder...")
-        else:
-            self.status_var.set(f"{stage}   ({pct}%){eta}")
-
-    # --- run ------------------------------------------------------------
-    def _on_run(self):
-        if self.worker and self.worker.is_alive():
-            return
-        selected = [n for n, v in self.source_vars.items() if v.get()]
-        if not selected:
-            messagebox.showwarning("Logs Grabber", "No log type selected.")
-            return
-        description = self.desc_text.get("1.0", "end").strip()
-        output_dir = self.out_var.get().strip() or None
-
-        self.run_btn.configure(state="disabled", text="Working...")
-        self.log_text.configure(state="normal")
-        self.log_text.delete("1.0", "end")
-        self.log_text.configure(state="disabled")
-        self.progress["value"] = 0
-        self.status_var.set("Starting...")
-        self.start_time = time.time()
-
-        self.worker = threading.Thread(
-            target=self._work, args=(selected, description, output_dir), daemon=True)
-        self.worker.start()
-        self.root.after(100, self._drain_queue)
-
-    def _work(self, selected, description, output_dir):
+    def run(self):
         try:
             result = grab_logs.run_grab(
                 self.config,
-                selected_names=selected,
-                description=description,
-                output_dir=output_dir,
-                log=self._on_log,
+                selected_names=self.selected,
+                description=self.description,
+                log=lambda m: self.log.emit(str(m)),
                 open_when_done=True,
-                progress=self._on_progress,
+                progress=lambda f, s: self.progress.emit(f, s),
             )
-            self._on_log(f"\n✓ Done. {result['copied']} file(s) collected.")
-            self.root.after(0, lambda: messagebox.showinfo(
-                "Logs Grabber",
-                f"Collection finished successfully!\n\n"
-                f"Folder: {result['bundle_dir']}\n"
-                f"Backup: {result['temp_zip']}"))
-        except Exception as e:  # noqa: BLE001 - surface any error to the user
-            self._on_log(f"\n[ERROR] {e}")
-            self.root.after(0, lambda: (
-                self.status_var.set("An error occurred."),
-                messagebox.showerror("Logs Grabber", str(e))))
+            self.done.emit(result)
+        except Exception as e:  # noqa: BLE001
+            self.failed.emit(str(e))
+
+
+class MainWindow(QWidget):
+    def __init__(self, config):
+        super().__init__()
+        self.config = config
+        self.sources = config.get("sources", [])
+        self.worker = None
+        self.start_time = None
+        self.checks = {}
+
+        self.setWindowTitle("Logs Grabber")
+        self.resize(720, 640)
+
+        layout = QVBoxLayout(self)
+
+        title = QLabel("Logs Grabber")
+        title.setStyleSheet("font-size: 18px; font-weight: bold;")
+        layout.addWidget(title)
+
+        subtitle = QLabel(
+            "Choose which log types to collect (everything is checked by "
+            "default), add a description, and click the button. The folder "
+            "opens automatically when finished.")
+        subtitle.setWordWrap(True)
+        subtitle.setStyleSheet("color: #555;")
+        layout.addWidget(subtitle)
+
+        # Sources
+        src_group = QGroupBox("Log types to collect")
+        src_outer = QVBoxLayout(src_group)
+        btn_row = QHBoxLayout()
+        select_all = QPushButton("Select all")
+        clear_all = QPushButton("Clear all")
+        select_all.clicked.connect(lambda: self._set_all(True))
+        clear_all.clicked.connect(lambda: self._set_all(False))
+        btn_row.addWidget(select_all)
+        btn_row.addWidget(clear_all)
+        btn_row.addStretch()
+        src_outer.addLayout(btn_row)
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFixedHeight(150)
+        inner = QWidget()
+        inner_layout = QVBoxLayout(inner)
+        if not self.sources:
+            inner_layout.addWidget(QLabel("(no sources defined in config.json)"))
+        for src in self.sources:
+            name = src["name"]
+            cb = QCheckBox(f"{name}   —   {src.get('path', '')}")
+            cb.setChecked(True)
+            self.checks[name] = cb
+            inner_layout.addWidget(cb)
+        inner_layout.addStretch()
+        scroll.setWidget(inner)
+        src_outer.addWidget(scroll)
+        layout.addWidget(src_group)
+
+        # Description
+        desc_group = QGroupBox("Description (saved to info.txt)")
+        desc_layout = QVBoxLayout(desc_group)
+        self.desc_edit = QPlainTextEdit()
+        self.desc_edit.setFixedHeight(60)
+        desc_layout.addWidget(self.desc_edit)
+        layout.addWidget(desc_group)
+
+        # Run button
+        self.run_btn = QPushButton("▶  Start collecting logs")
+        self.run_btn.setStyleSheet("font-size: 15px; font-weight: bold; padding: 10px;")
+        self.run_btn.clicked.connect(self._on_run)
+        layout.addWidget(self.run_btn)
+
+        # Progress
+        self.bar = QProgressBar()
+        self.bar.setRange(0, 100)
+        layout.addWidget(self.bar)
+        self.status = QLabel("Ready.")
+        layout.addWidget(self.status)
+
+        # Details
+        line = QFrame()
+        line.setFrameShape(QFrame.Shape.HLine)
+        layout.addWidget(line)
+        layout.addWidget(QLabel("Details"))
+        self.log_view = QPlainTextEdit()
+        self.log_view.setReadOnly(True)
+        self.log_view.setStyleSheet("background: #1e1e1e; color: #dcdcdc;")
+        self.log_view.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        layout.addWidget(self.log_view)
+
+    def _set_all(self, value):
+        for cb in self.checks.values():
+            cb.setChecked(value)
+
+    def _on_run(self):
+        if self.worker and self.worker.isRunning():
+            return
+        selected = [n for n, cb in self.checks.items() if cb.isChecked()]
+        if not selected:
+            QMessageBox.warning(self, "Logs Grabber", "No log type selected.")
+            return
+
+        self.run_btn.setEnabled(False)
+        self.run_btn.setText("Working...")
+        self.log_view.clear()
+        self.bar.setValue(0)
+        self.status.setText("Starting...")
+        self.start_time = time.time()
+
+        self.worker = Worker(self.config, selected,
+                             self.desc_edit.toPlainText().strip())
+        self.worker.progress.connect(self._on_progress)
+        self.worker.log.connect(self._on_log)
+        self.worker.done.connect(self._on_done)
+        self.worker.failed.connect(self._on_failed)
+        self.worker.start()
+
+    def _on_log(self, msg):
+        self.log_view.appendPlainText(msg)
+
+    def _on_progress(self, frac, stage):
+        pct = int(frac * 100)
+        self.bar.setValue(pct)
+        if frac >= 1.0:
+            self.status.setText("Done! ✓  Opening folder...")
+            return
+        eta = ""
+        if self.start_time and frac > 0.02:
+            elapsed = time.time() - self.start_time
+            eta = f"  —  about {_fmt_eta(elapsed * (1 - frac) / frac)} left"
+        self.status.setText(f"{stage}   ({pct}%){eta}")
+
+    def _on_done(self, result):
+        self.run_btn.setEnabled(True)
+        self.run_btn.setText("▶  Start collecting logs")
+        QMessageBox.information(
+            self, "Logs Grabber",
+            f"Collection finished successfully!\n\n"
+            f"Folder: {result['bundle_dir']}\n"
+            f"Backup: {result['temp_zip']}")
+
+    def _on_failed(self, message):
+        self.run_btn.setEnabled(True)
+        self.run_btn.setText("▶  Start collecting logs")
+        self.status.setText("An error occurred.")
+        QMessageBox.critical(self, "Logs Grabber", message)
 
 
 def main():
-    config_path = grab_logs.resolve_config_path("config.json")
+    app = QApplication(sys.argv)
     try:
-        config = grab_logs.load_config(config_path)
+        config = grab_logs.load_config(grab_logs.resolve_config_path())
         grab_logs.validate_config(config)
     except grab_logs.GrabError as e:
-        root = tk.Tk()
-        root.withdraw()
-        messagebox.showerror("Logs Grabber", f"Problem in config.json:\n{e}")
+        QMessageBox.critical(None, "Logs Grabber", f"Problem in config.json:\n{e}")
         return
-
-    root = tk.Tk()
-    LogsGrabberGUI(root, config)
-    root.mainloop()
+    window = MainWindow(config)
+    window.show()
+    sys.exit(app.exec())
 
 
 if __name__ == "__main__":

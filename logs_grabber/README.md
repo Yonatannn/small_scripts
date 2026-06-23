@@ -2,42 +2,45 @@
 
 Collects log files from predefined locations on a machine, packages them,
 and produces three artifacts plus a separate dated backup in `%TEMP%`.
-Comes with a GUI (`gui.py`) and a headless CLI (`grab_logs.py`).
 
-Target platform: **Windows 11, Python 3.10** (standard library only; the
-GUI uses `tkinter`, which ships with the standard Python.org installer).
+Target platform: **Windows 11, Python 3.10**.
+
+- `grab_logs.py` — the collection logic (standard library only).
+- `gui.py` — a PyQt6 interface. Requires `pip install PyQt6`.
 
 ## What it does
 
-1. Reads `config.json` for the list of source locations and the output
-   destination.
-2. Copies **everything** from each *selected* source (files or whole
-   folders) into a freshly organized package, grouped by source name.
+1. Reads `config.json` for the source locations and the output folder.
+2. Copies **everything** from each selected source (files or whole folders)
+   into a freshly organized package, grouped by source name.
 3. Zips that package.
 4. Runs `../transfer/add_data.py` on the zip to produce a padded `.bin`.
-5. Keeps all **three** artifacts -- plus an `info.txt` description -- together
-   in a folder named **`Logs - <date>`**, and opens it in Explorer.
-6. In parallel, writes a **backup of everything to `%TEMP%`**, mirroring
-   the *original* folder layout, under a top-level `Logs - <date>` folder.
-   That backup is finally kept **only as a single zip**.
+5. Keeps all **three** artifacts -- plus an `info.txt` description -- in a
+   folder named **`Logs - <date>`**, and opens it in Explorer.
+6. In parallel, writes a backup of everything to `%TEMP%`, mirroring the
+   original folder layout under a top-level `Logs - <date>` folder, kept
+   finally **only as a single zip**.
 
-## GUI
+## Run it
+
+GUI (recommended):
 
 ```bat
+pip install PyQt6
 python gui.py
 ```
 
-- Lists every log source with a checkbox. **All are checked by default**
-  (everything is collected); uncheck anything you don't want this run.
-- A free-text box for a **description** of the logs. It is saved to
-  `info.txt` (UTF-8, opens correctly in Notepad) inside the `Logs - <date>`
-  folder and inside the temp backup, together with the list of which
-  sources were included/excluded.
-- One big "Start collecting logs" button, a **progress bar with a live
-  time-remaining estimate** while it copies, and an output-directory
-  picker. The result folder **opens automatically** when finished.
+- One checkbox per log source, **all checked by default** (collect
+  everything); uncheck anything you don't want this run.
+- A description box, saved to `info.txt`.
+- A big button, a progress bar with a live time-remaining estimate, and the
+  result folder opens automatically when finished.
 
-`python grab_logs.py --gui` launches the same GUI.
+Headless (collect everything, no options):
+
+```bat
+python grab_logs.py
+```
 
 ## Output layout
 
@@ -46,8 +49,6 @@ Main output (path from `output_dir`, defaults to the Desktop):
 ```
 Logs - <YYYY-MM-DD>/
 ├── logs/                          <- organized package (by source name)
-│   ├── windows_logs/...
-│   └── myapp_local/...
 ├── Logs - <YYYY-MM-DD>.zip        <- zip of logs/
 ├── Logs - <YYYY-MM-DD>.zip.bin    <- add_data.py output
 └── info.txt                       <- description + what was collected
@@ -59,7 +60,6 @@ Temp backup (mirrors the original paths, kept only as a zip):
 
 ```
 %TEMP%/LogsGrabber/Logs - <YYYY-MM-DD>.zip
-   (inside: Logs - <date>/C/Windows/Logs/..., plus info.txt)
 ```
 
 ## Configuration (`config.json`)
@@ -67,23 +67,10 @@ Temp backup (mirrors the original paths, kept only as a zip):
 | Key               | Meaning                                                            |
 |-------------------|-------------------------------------------------------------------|
 | `sources`         | List of `{ "name", "path" }`. `path` may be a file or a folder.   |
-| `output_dir`      | Where the main bundle is created (env vars expanded). Optional.   |
+| `output_dir`      | Where the main folder is created (env vars expanded). Optional.   |
 | `add_data_kb`     | KB of random padding for `add_data.py` (default 4).               |
 | `add_data_script` | Override path to `add_data.py` (default: `../transfer/add_data.py`). |
 
 Environment variables in paths (e.g. `%LOCALAPPDATA%`, `%USERPROFILE%`)
-are expanded.
-
-## CLI usage
-
-```bat
-python grab_logs.py                          :: collect everything
-python grab_logs.py --only windows_logs,cbs  :: only specific sources
-python grab_logs.py -d "my description"       :: description -> info.txt
-python grab_logs.py -o D:\exports            :: override output dir
-python grab_logs.py --no-open                :: don't open Explorer
-python grab_logs.py --gui                    :: launch the GUI
-```
-
-Log files that are locked / in use are skipped with a warning rather than
-aborting the run.
+are expanded. Log files that are locked / in use are skipped with a warning
+rather than aborting the run.

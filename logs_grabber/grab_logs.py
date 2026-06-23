@@ -1,18 +1,4 @@
 #!/usr/bin/env python3
-"""Logs grabber core + CLI.
-
-Collect log files from predefined locations, package them into a folder
-named "Logs - <date>", zip the package, run transfer/add_data.py on the
-zip, and keep all three artifacts. A mirrored backup of everything (by
-original folder layout) is also written to %TEMP% and kept there only as a
-zip. An optional description is saved as info.txt inside the main folder.
-
-The collection logic lives in run_grab() so it can be driven from both
-this CLI and the GUI (gui.py).
-
-Target platform: Windows 11, Python 3.10.
-"""
-import argparse
 import datetime
 import json
 import os
@@ -24,13 +10,7 @@ import tempfile
 
 
 class GrabError(Exception):
-    """Raised on a fatal problem; callers decide how to report it."""
-
-
-def section(title):
-    print(f"\n{'=' * 60}")
-    print(f"  {title}")
-    print('=' * 60)
+    pass
 
 
 def load_config(config_path):
@@ -59,7 +39,6 @@ def validate_config(config):
 
 
 def path_size(path):
-    """Total size in bytes of a file or directory tree (best effort)."""
     p = pathlib.Path(path)
     if not p.exists():
         return 0
@@ -79,9 +58,6 @@ def path_size(path):
 
 
 def copy_tree_safe(src, dst, log=print, on_bytes=None):
-    """Copy a directory tree, skipping files that can't be read (e.g. locked
-    log files in use). Returns (copied, skipped). on_bytes(n) is called with
-    the size of each file successfully copied."""
     copied = skipped = 0
     for root, _dirs, files in os.walk(src):
         rel = os.path.relpath(root, src)
@@ -99,13 +75,12 @@ def copy_tree_safe(src, dst, log=print, on_bytes=None):
                     except OSError:
                         pass
             except OSError as e:
-                log(f"    [skip] {s}: {e}")
+                log(f"  [skip] {s}: {e}")
                 skipped += 1
     return copied, skipped
 
 
 def copy_source(path, dest_dir, log=print, on_bytes=None):
-    """Copy a source (file or directory) into dest_dir. Returns (copied, skipped)."""
     p = pathlib.Path(path)
     if not p.exists():
         log(f"  [WARN] source not found, skipping: {path}")
@@ -124,12 +99,11 @@ def copy_source(path, dest_dir, log=print, on_bytes=None):
                 pass
         return 1, 0
     except OSError as e:
-        log(f"    [skip] {p}: {e}")
+        log(f"  [skip] {p}: {e}")
         return 0, 1
 
 
 def _counting_copy2(on_bytes):
-    """A copy_function for shutil.copytree that reports bytes copied."""
     def _cp(src, dst, *, follow_symlinks=True):
         shutil.copy2(src, dst, follow_symlinks=follow_symlinks)
         if on_bytes:
@@ -141,25 +115,19 @@ def _counting_copy2(on_bytes):
 
 
 def mirror_relpath(abs_path):
-    """Turn an absolute Windows path into a relative path that preserves the
-    original folder layout, e.g. C:\\Windows\\Logs -> C\\Windows\\Logs and
-    \\\\server\\share\\x -> UNC\\server\\share\\x."""
     p = pathlib.PureWindowsPath(abs_path)
     parts = list(p.parts)
     if not parts:
         return pathlib.Path("unknown")
-    anchor = parts[0]
     rest = parts[1:]
     if p.drive.startswith("\\\\"):
         unc = p.drive.strip("\\").replace("\\", os.sep)
         return pathlib.Path("UNC", unc, *rest)
-    drive = anchor.rstrip(":\\/") or "ROOT"
+    drive = parts[0].rstrip(":\\/") or "ROOT"
     return pathlib.Path(drive, *rest)
 
 
 def make_zip(src_dir, zip_path, base_dir=None):
-    """Zip a directory into zip_path. With base_dir set, the archive contains
-    that folder as its top-level entry; otherwise just the contents."""
     zip_path = pathlib.Path(zip_path)
     base = zip_path.with_suffix("") if zip_path.suffix == ".zip" else zip_path
     if base_dir:
@@ -170,13 +138,8 @@ def make_zip(src_dir, zip_path, base_dir=None):
 
 
 def run_add_data(add_data_script, zip_path, bin_path, kb, log=print):
-    """Run transfer/add_data.py on the zip to produce the .bin artifact."""
-    cmd = [
-        sys.executable, str(add_data_script),
-        str(zip_path),
-        "-k", str(kb),
-        "-o", str(bin_path),
-    ]
+    cmd = [sys.executable, str(add_data_script), str(zip_path),
+           "-k", str(kb), "-o", str(bin_path)]
     log(f"  Running add_data.py ({kb} KB padding)...")
     result = subprocess.run(cmd, check=False)
     if result.returncode != 0:
@@ -185,9 +148,9 @@ def run_add_data(add_data_script, zip_path, bin_path, kb, log=print):
 
 def open_folder(path, log=print):
     try:
-        os.startfile(str(path))  # Windows only
+        os.startfile(str(path))
     except AttributeError:
-        subprocess.run(["xdg-open", str(path)], check=False)  # dev/testing fallback
+        subprocess.run(["xdg-open", str(path)], check=False)
     except OSError as e:
         log(f"  [WARN] could not open folder: {e}")
 
@@ -206,11 +169,15 @@ def resolve_add_data_script(config):
     return add_data_script
 
 
-def resolve_output_dir(config, override=None):
-    output_dir = override or config.get("output_dir")
-    if output_dir:
-        return pathlib.Path(os.path.expandvars(str(output_dir)))
+def resolve_output_dir(config):
+    out = config.get("output_dir")
+    if out:
+        return pathlib.Path(os.path.expandvars(str(out)))
     return pathlib.Path.home() / "Desktop"
+
+
+def resolve_config_path():
+    return pathlib.Path(__file__).resolve().parent / "config.json"
 
 
 def _unique_dir(parent, base, stamp):
@@ -222,8 +189,6 @@ def _unique_dir(parent, base, stamp):
 
 
 def _write_info_file(folder, description, included, excluded, now):
-    """Save the description + collection summary as info.txt.
-    UTF-8 with BOM so Windows Notepad renders any non-ASCII text correctly."""
     lines = []
     if description and description.strip():
         lines.append(description.strip())
@@ -244,13 +209,8 @@ def _write_info_file(folder, description, included, excluded, now):
         "\n".join(lines) + "\n", encoding="utf-8-sig")
 
 
-def run_grab(config, selected_names=None, description="", output_dir=None,
-             kb=None, log=print, open_when_done=True, progress=None):
-    """Run the full grab. Returns a dict of result paths. Raises GrabError.
-
-    progress(fraction, stage) is called with fraction in 0..1 and a short
-    stage label, so a GUI can drive a progress bar / ETA.
-    """
+def run_grab(config, selected_names=None, description="", log=print,
+             open_when_done=True, progress=None):
     def report(frac, stage):
         if progress:
             progress(min(max(frac, 0.0), 1.0), stage)
@@ -269,33 +229,27 @@ def run_grab(config, selected_names=None, description="", output_dir=None,
     included = [s["name"] for s in selected]
     excluded = [n for n in all_names if n not in set(included)]
 
-    if kb is None:
-        kb = int(config.get("add_data_kb", 4))
+    kb = int(config.get("add_data_kb", 4))
     add_data_script = resolve_add_data_script(config)
 
-    out_root = resolve_output_dir(config, output_dir)
+    out_root = resolve_output_dir(config)
     out_root.mkdir(parents=True, exist_ok=True)
 
     now = datetime.datetime.now()
     stamp = now.strftime("%H-%M-%S")
-    date_only = now.strftime("%Y-%m-%d")
-    folder_name = f"Logs - {date_only}"
+    folder_name = f"Logs - {now.strftime('%Y-%m-%d')}"
 
-    # Main output folder "Logs - <date>" holding the three artifacts + info.txt
     bundle_dir = _unique_dir(out_root, folder_name, stamp)
     organized_dir = bundle_dir / "logs"
     organized_dir.mkdir(parents=True, exist_ok=True)
 
-    # Temp backup mirroring the original folder layout, under "Logs - <date>"
     temp_root = pathlib.Path(tempfile.gettempdir()) / "LogsGrabber"
     temp_date_dir = _unique_dir(temp_root, folder_name, stamp)
 
-    # Pre-scan total bytes so we can show real progress + an ETA. Each byte is
-    # copied twice (organized package + temp mirror), hence the factor of 2.
     report(0.0, "Scanning...")
     scanned = sum(path_size(os.path.expandvars(s["path"])) for s in selected)
     total_units = max(1, 2 * scanned)
-    COPY_FRAC = 0.85  # collection occupies 0..85% of the bar
+    COPY_FRAC = 0.85
     copied_units = 0
 
     def on_bytes(n):
@@ -303,26 +257,22 @@ def run_grab(config, selected_names=None, description="", output_dir=None,
         copied_units += n
         report(COPY_FRAC * copied_units / total_units, current_stage)
 
-    section("Collecting logs")
+    log("Collecting logs...")
     if excluded:
-        log(f"  Excluded (per selection): {', '.join(excluded)}")
+        log(f"  Excluded: {', '.join(excluded)}")
     total_copied = total_skipped = 0
     for src in selected:
         name = src["name"]
         path = os.path.expandvars(src["path"])
         current_stage = f"Copying: {name}"
-        log(f"\n  [{name}] {path}")
+        log(f"  [{name}] {path}")
         report(COPY_FRAC * copied_units / total_units, current_stage)
 
-        # 1) organized package, grouped by source name
         organized_target = organized_dir / name
         copied, skipped = copy_source(path, organized_target, log=log, on_bytes=on_bytes)
         total_copied += copied
         total_skipped += skipped
-        log(f"    copied {copied} file(s)"
-            + (f", skipped {skipped}" if skipped else ""))
 
-        # 2) temp backup mirroring the original layout (from the organized copy)
         if copied:
             mirror_target = temp_date_dir / mirror_relpath(path)
             if pathlib.Path(path).is_dir():
@@ -333,42 +283,27 @@ def run_grab(config, selected_names=None, description="", output_dir=None,
                 shutil.copy2(organized_target / pathlib.Path(path).name, mirror_target)
                 on_bytes(path_size(path))
 
-    log(f"\n  Total: {total_copied} file(s) copied, {total_skipped} skipped.")
+    log(f"  Total: {total_copied} copied, {total_skipped} skipped.")
     report(COPY_FRAC, "Writing details...")
 
-    # info.txt in both the main folder and the temp backup folder
     _write_info_file(bundle_dir, description, included, excluded, now)
     _write_info_file(temp_date_dir, description, included, excluded, now)
 
-    # --- Main bundle: zip + add_data --------------------------------------
-    section("Packaging main bundle")
     report(0.88, "Creating ZIP...")
     zip_path = bundle_dir / f"{bundle_dir.name}.zip"
-    log(f"  Zipping organized folder -> {zip_path.name}")
     make_zip(organized_dir, zip_path)
 
     report(0.93, "Creating .bin...")
     bin_path = bundle_dir / f"{bundle_dir.name}.zip.bin"
     run_add_data(add_data_script, zip_path, bin_path, kb, log=log)
 
-    log(f"\n  Bundle artifacts in {bundle_dir}:")
-    log(f"    - logs/                 (organized folder)")
-    log(f"    - {zip_path.name}")
-    log(f"    - {bin_path.name}")
-    log(f"    - info.txt")
-
-    # --- Temp backup: zip (keep the named top folder) and keep only the zip --
-    section("Backing up to %TEMP%")
     report(0.97, "Backing up...")
     temp_zip = temp_root / f"{temp_date_dir.name}.zip"
-    log(f"  Zipping backup -> {temp_zip}")
     make_zip(temp_root, temp_zip, base_dir=temp_date_dir.name)
     shutil.rmtree(temp_date_dir, ignore_errors=True)
-    log(f"  Backup saved (zip only): {temp_zip}")
 
-    section("Done")
-    log(f"\n  Output folder: {bundle_dir}")
-    log(f"  Temp backup  : {temp_zip}\n")
+    log(f"Done. Output: {bundle_dir}")
+    log(f"Backup: {temp_zip}")
     report(1.0, "Done")
 
     if open_when_done:
@@ -384,51 +319,10 @@ def run_grab(config, selected_names=None, description="", output_dir=None,
     }
 
 
-def resolve_config_path(config_arg):
-    config_path = pathlib.Path(config_arg)
-    if not config_path.is_absolute():
-        config_path = pathlib.Path(__file__).parent / config_path
-    return config_path
-
-
 def main():
-    parser = argparse.ArgumentParser(
-        prog="grab_logs.py",
-        description="Collect logs from predefined locations, package, zip, "
-                    "pad with add_data.py, and back up to %TEMP%.",
-    )
-    parser.add_argument("-c", "--config", default="config.json", metavar="FILE",
-                        help="Path to config JSON (default: config.json next to this script)")
-    parser.add_argument("-o", "--output", metavar="DIR",
-                        help="Override output directory from config")
-    parser.add_argument("-d", "--description", default="", metavar="TEXT",
-                        help="Free-text description saved to info.txt")
-    parser.add_argument("--only", metavar="NAMES",
-                        help="Comma-separated source names to include (default: all)")
-    parser.add_argument("--no-open", action="store_true",
-                        help="Do not open the output folder when finished")
-    parser.add_argument("--gui", action="store_true",
-                        help="Launch the graphical interface instead of running headless")
-    args = parser.parse_args()
-
-    if args.gui:
-        import gui
-        gui.main()
-        return
-
     try:
-        config = load_config(resolve_config_path(args.config))
-        selected = None
-        if args.only:
-            selected = [s.strip() for s in args.only.split(",") if s.strip()]
-        run_grab(
-            config,
-            selected_names=selected,
-            description=args.description,
-            output_dir=args.output,
-            log=print,
-            open_when_done=not args.no_open,
-        )
+        config = load_config(resolve_config_path())
+        run_grab(config, log=print)
     except GrabError as e:
         print(f"Error: {e}", file=sys.stderr)
         sys.exit(1)
