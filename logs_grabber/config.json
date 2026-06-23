@@ -1,0 +1,22 @@
+{
+  "output_dir": "%USERPROFILE%\\Desktop",
+  "add_data_kb": 4,
+  "sources": [
+    {
+      "name": "windows_logs",
+      "path": "C:\\Windows\\Logs"
+    },
+    {
+      "name": "cbs",
+      "path": "C:\\Windows\\Logs\\CBS"
+    },
+    {
+      "name": "myapp_local",
+      "path": "%LOCALAPPDATA%\\MyApp\\logs"
+    },
+    {
+      "name": "myapp_programdata",
+      "path": "C:\\ProgramData\\MyApp\\app.log"
+    }
+  ]
+}

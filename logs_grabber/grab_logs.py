@@ -1,0 +1,344 @@
+#!/usr/bin/env python3
+import datetime
+import json
+import os
+import pathlib
+import shutil
+import subprocess
+import sys
+import tempfile
+
+
+class GrabError(Exception):
+    pass
+
+
+def load_config(config_path):
+    try:
+        return json.loads(pathlib.Path(config_path).read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        raise GrabError(f"config not found: {config_path!r}")
+    except json.JSONDecodeError as e:
+        raise GrabError(f"invalid JSON in config: {e}")
+
+
+def validate_config(config):
+    sources = config.get("sources", [])
+    if not sources:
+        raise GrabError("config has no 'sources' to collect.")
+    seen = set()
+    for src in sources:
+        name = src.get("name")
+        if not name:
+            raise GrabError("a source entry is missing 'name'.")
+        if not src.get("path"):
+            raise GrabError(f"source '{name}' is missing 'path'.")
+        if name in seen:
+            raise GrabError(f"duplicate source name: {name!r}")
+        seen.add(name)
+
+
+def path_size(path):
+    p = pathlib.Path(path)
+    if not p.exists():
+        return 0
+    if p.is_file():
+        try:
+            return p.stat().st_size
+        except OSError:
+            return 0
+    total = 0
+    for root, _dirs, files in os.walk(p):
+        for f in files:
+            try:
+                total += os.path.getsize(os.path.join(root, f))
+            except OSError:
+                pass
+    return total
+
+
+def _remove_empty_dirs(root):
+    root = os.path.abspath(root)
+    for dirpath, _dirs, _files in os.walk(root, topdown=False):
+        if os.path.abspath(dirpath) == root:
+            continue  # keep the original top-level source folder itself
+        try:
+            if not os.listdir(dirpath):
+                os.rmdir(dirpath)
+        except OSError:
+            pass
+
+
+def _transfer_file(s, d, move, on_bytes):
+    size = os.path.getsize(s)
+    if move:
+        shutil.move(s, d)
+    else:
+        shutil.copy2(s, d)
+    if on_bytes:
+        on_bytes(size)
+
+
+def transfer_tree(src, dst, move=False, log=print, on_bytes=None):
+    done = skipped = 0
+    for root, _dirs, files in os.walk(src):
+        rel = os.path.relpath(root, src)
+        target_root = dst if rel == "." else os.path.join(dst, rel)
+        os.makedirs(target_root, exist_ok=True)
+        for f in files:
+            s = os.path.join(root, f)
+            d = os.path.join(target_root, f)
+            try:
+                _transfer_file(s, d, move, on_bytes)
+                done += 1
+            except OSError as e:
+                log(f"  [skip] {s}: {e}")
+                skipped += 1
+    if move:
+        _remove_empty_dirs(src)
+    return done, skipped
+
+
+def transfer_source(path, dest_dir, move=False, log=print, on_bytes=None):
+    p = pathlib.Path(path)
+    if not p.exists():
+        log(f"  [WARN] source not found, skipping: {path}")
+        return 0, 0
+    if p.is_dir():
+        os.makedirs(dest_dir, exist_ok=True)
+        return transfer_tree(str(p), str(dest_dir), move=move, log=log, on_bytes=on_bytes)
+    os.makedirs(dest_dir, exist_ok=True)
+    try:
+        _transfer_file(str(p), str(pathlib.Path(dest_dir) / p.name), move, on_bytes)
+        return 1, 0
+    except OSError as e:
+        log(f"  [skip] {p}: {e}")
+        return 0, 1
+
+
+def mirror_relpath(abs_path):
+    p = pathlib.PureWindowsPath(abs_path)
+    parts = list(p.parts)
+    if not parts:
+        return pathlib.Path("unknown")
+    rest = parts[1:]
+    if p.drive.startswith("\\\\"):
+        unc = p.drive.strip("\\").replace("\\", os.sep)
+        return pathlib.Path("UNC", unc, *rest)
+    drive = parts[0].rstrip(":\\/") or "ROOT"
+    return pathlib.Path(drive, *rest)
+
+
+def make_zip(src_dir, zip_path, base_dir=None):
+    zip_path = pathlib.Path(zip_path)
+    base = zip_path.with_suffix("") if zip_path.suffix == ".zip" else zip_path
+    if base_dir:
+        shutil.make_archive(str(base), "zip", root_dir=str(src_dir), base_dir=base_dir)
+    else:
+        shutil.make_archive(str(base), "zip", root_dir=str(src_dir))
+    return pathlib.Path(str(base) + ".zip")
+
+
+def run_add_data(add_data_script, zip_path, bin_path, kb, log=print):
+    cmd = [sys.executable, str(add_data_script), str(zip_path),
+           "-k", str(kb), "-o", str(bin_path)]
+    log(f"  Running add_data.py ({kb} KB padding)...")
+    result = subprocess.run(cmd, check=False)
+    if result.returncode != 0:
+        raise GrabError(f"add_data.py failed (exit {result.returncode})")
+
+
+def open_folder(path, log=print):
+    try:
+        os.startfile(str(path))
+    except AttributeError:
+        subprocess.run(["xdg-open", str(path)], check=False)
+    except OSError as e:
+        log(f"  [WARN] could not open folder: {e}")
+
+
+def resolve_add_data_script(config):
+    script_dir = pathlib.Path(__file__).resolve().parent
+    add_data_script = config.get("add_data_script")
+    if add_data_script:
+        add_data_script = pathlib.Path(add_data_script)
+        if not add_data_script.is_absolute():
+            add_data_script = script_dir / add_data_script
+    else:
+        add_data_script = script_dir / "add_data.py"
+    if not add_data_script.is_file():
+        raise GrabError(f"add_data.py not found at {add_data_script}")
+    return add_data_script
+
+
+def resolve_output_dir(config):
+    out = config.get("output_dir")
+    if out:
+        return pathlib.Path(os.path.expandvars(str(out)))
+    return pathlib.Path.home() / "Desktop"
+
+
+def resolve_config_path():
+    return pathlib.Path(__file__).resolve().parent / "config.json"
+
+
+def _unique_dir(parent, base, stamp):
+    d = parent / base
+    if d.exists():
+        d = parent / f"{base} ({stamp})"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def _write_info_file(folder, description, included, excluded, now):
+    lines = []
+    if description and description.strip():
+        lines.append(description.strip())
+        lines.append("")
+        lines.append("-" * 40)
+        lines.append("")
+    lines.append(f"Backup date: {now.strftime('%Y-%m-%d %H:%M:%S')}")
+    lines.append("")
+    lines.append("Log types collected:")
+    for n in included:
+        lines.append(f"  + {n}")
+    if excluded:
+        lines.append("")
+        lines.append("Log types excluded (not collected):")
+        for n in excluded:
+            lines.append(f"  - {n}")
+    (pathlib.Path(folder) / "info.txt").write_text(
+        "\n".join(lines) + "\n", encoding="utf-8-sig")
+
+
+def run_grab(config, selected_names=None, description="", log=print,
+             open_when_done=True, progress=None):
+    def report(frac, stage):
+        if progress:
+            progress(min(max(frac, 0.0), 1.0), stage)
+
+    validate_config(config)
+
+    sources = config["sources"]
+    all_names = [s["name"] for s in sources]
+    if selected_names is None:
+        selected = list(sources)
+    else:
+        sel = set(selected_names)
+        selected = [s for s in sources if s["name"] in sel]
+    if not selected:
+        raise GrabError("no sources selected to collect.")
+    included = [s["name"] for s in selected]
+    excluded = [n for n in all_names if n not in set(included)]
+
+    kb = int(config.get("add_data_kb", 4))
+    add_data_script = resolve_add_data_script(config)
+
+    out_root = resolve_output_dir(config)
+    out_root.mkdir(parents=True, exist_ok=True)
+
+    now = datetime.datetime.now()
+    stamp = str(now.microsecond)
+    folder_name = f"Logs_{now.strftime('%Y-%m-%d_%H-%M-%S')}"
+
+    bundle_dir = _unique_dir(out_root, folder_name, stamp)
+    organized_dir = bundle_dir / "logs"
+    organized_dir.mkdir(parents=True, exist_ok=True)
+
+    temp_root = pathlib.Path(tempfile.gettempdir()) / "LogsGrabber"
+    temp_date_dir = _unique_dir(temp_root, folder_name, stamp)
+
+    report(0.0, "Scanning...")
+    scanned = sum(path_size(os.path.expandvars(s["path"])) for s in selected)
+    total = max(1, scanned)
+    BACKUP_FRAC = 0.45  # phase A: copy to %TEMP%
+    MOVE_FRAC = 0.35    # phase B: move to output (0.50 .. 0.85)
+    current_stage = ""
+
+    # --- Phase A: copy everything to the %TEMP% backup and zip it FIRST ----
+    copied_bytes = 0
+
+    def on_copy(n):
+        nonlocal copied_bytes
+        copied_bytes += n
+        report(BACKUP_FRAC * copied_bytes / total, current_stage)
+
+    log("Backing up to %TEMP%...")
+    if excluded:
+        log(f"  Excluded: {', '.join(excluded)}")
+    for src in selected:
+        name = src["name"]
+        path = os.path.expandvars(src["path"])
+        current_stage = f"Backing up: {name}"
+        log(f"  [{name}] {path}")
+        rel = mirror_relpath(path)
+        dest_dir = temp_date_dir / (rel if pathlib.Path(path).is_dir() else rel.parent)
+        transfer_source(path, dest_dir, move=False, log=log, on_bytes=on_copy)
+
+    _write_info_file(temp_date_dir, description, included, excluded, now)
+    report(0.50, "Saving backup zip...")
+    temp_zip = temp_root / f"{temp_date_dir.name}.zip"
+    make_zip(temp_root, temp_zip, base_dir=temp_date_dir.name)
+    shutil.rmtree(temp_date_dir, ignore_errors=True)
+    log(f"  Backup saved: {temp_zip}")
+
+    # --- Phase B: now that the backup is safe, MOVE originals to output ----
+    moved_bytes = 0
+
+    def on_move(n):
+        nonlocal moved_bytes
+        moved_bytes += n
+        report(0.50 + MOVE_FRAC * moved_bytes / total, current_stage)
+
+    log("Moving logs to output...")
+    total_moved = total_skipped = 0
+    for src in selected:
+        name = src["name"]
+        path = os.path.expandvars(src["path"])
+        current_stage = f"Moving: {name}"
+        log(f"  [{name}] {path}")
+        moved, skipped = transfer_source(path, organized_dir / name, move=True,
+                                         log=log, on_bytes=on_move)
+        total_moved += moved
+        total_skipped += skipped
+    log(f"  Total: {total_moved} moved, {total_skipped} skipped.")
+
+    report(0.86, "Writing details...")
+    _write_info_file(bundle_dir, description, included, excluded, now)
+
+    report(0.88, "Creating ZIP...")
+    zip_path = bundle_dir / f"{bundle_dir.name}.zip"
+    make_zip(organized_dir, zip_path)
+
+    report(0.93, "Creating .bin...")
+    bin_path = bundle_dir / f"{bundle_dir.name}.zip.bin"
+    run_add_data(add_data_script, zip_path, bin_path, kb, log=log)
+
+    log(f"Done. Output: {bundle_dir}")
+    log(f"Backup: {temp_zip}")
+    report(1.0, "Done")
+
+    if open_when_done:
+        open_folder(bundle_dir, log=log)
+
+    return {
+        "bundle_dir": bundle_dir,
+        "zip": zip_path,
+        "bin": bin_path,
+        "temp_zip": temp_zip,
+        "copied": total_moved,
+        "skipped": total_skipped,
+    }
+
+
+def main():
+    try:
+        config = load_config(resolve_config_path())
+        run_grab(config, log=print)
+    except GrabError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()
